@@ -1,4 +1,6 @@
-Overview
+Overview:
+
+
 Travel Portal is a JavaFX desktop application that unifies trip planning, route visualization, risk alerts, and expense reporting in one workspace.
 It lets you build multi-city itineraries, see them plotted on an interactive map, enrich each leg with travel time and AI-assisted alerts, and roll everything into monthly spend reporting and business agendas. 
 The app favors fast iteration and clear data flow: background workers gather route, weather, and attraction data while the UI stays responsive.
