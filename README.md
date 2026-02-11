@@ -24,3 +24,5 @@ Business Use Case Narrative
 For business travel teams, the Travel Portal compresses the entire workflow into one tool: planners can assemble multi-city itineraries, confirm routes visually, and compare cost and time across travel modes. 
 Risk and readiness are improved by live weather and air-quality signals, with AI summaries that help travelers make faster decisions. Finance gains monthly spend visibility and drill-down receipts to support compliance and reporting.
 Meanwhile, business development teams can align meetings and local networking (including SBA office visits) city by city. The result is a single source of truth that reduces tool sprawl, improves traveler safety, and makes reporting audit-ready.
+
+<img width="1908" height="1130" alt="image" src="https://github.com/user-attachments/assets/0caee399-3245-4b03-b985-b3f9e3d1c1d4" />
