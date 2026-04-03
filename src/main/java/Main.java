@@ -1,14 +1,20 @@
+import java.awt.Desktop;
+import java.io.FileInputStream;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.URLDecoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDate;
-import java.io.FileInputStream;
 import java.util.Properties;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.LinkedHashMap;
@@ -50,6 +56,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.geometry.Pos;
+import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 import javafx.scene.text.Text;
@@ -67,10 +74,11 @@ public class Main extends Application {
   private static final Map<String, double[]> FALLBACK_COORDS = buildFallbackCoords();
   private static final Map<String, DrivingMetrics> OSRM_CACHE = new LinkedHashMap<>();
   private static final Map<String, List<Attraction>> ATTRACTIONS_CACHE = new LinkedHashMap<>();
+  private static final Map<String, List<Restaurant>> RESTAURANT_CACHE = new LinkedHashMap<>();
+  private static final Map<String, List<HotelOption>> HOTEL_CACHE = new LinkedHashMap<>();
+  private static final Map<String, BusinessTripProfile> BUSINESS_TRIP_PROFILES = new LinkedHashMap<>();
   private static final Map<String, Image> MODE_IMAGE_CACHE = new LinkedHashMap<>();
   private static final Map<String, ObservableList<String>> AGENDA_ITEMS = new LinkedHashMap<>();
-  private static final Map<String, String> SBA_SELECTIONS = new LinkedHashMap<>();
-  private static final Map<String, List<String>> SBA_OFFICES = buildSbaOffices();
   private static final Map<String, LiveAlertData> LIVE_ALERT_CACHE = new LinkedHashMap<>();
   private static final long LIVE_ALERT_TTL_MS = 10 * 60 * 1000;
 
@@ -88,6 +96,9 @@ public class Main extends Application {
     stage.setTitle("Travel Portal- Plan, Expensify, Report");
     WebView webView = new WebView();
     webView.getEngine().setJavaScriptEnabled(true);
+    final List<String>[] currentRouteCities = new List[]{new ArrayList<>(routeCities)};
+    final String[] contentMode = {"overview"};
+    final String[] selectedContentCity = {routeCities.isEmpty() ? "" : routeCities.get(0)};
 
     Label status = new Label("Loading map...");
     status.setTextFill(Color.BLACK);
@@ -120,15 +131,22 @@ public class Main extends Application {
     VBox routeBox = new VBox(6, new Label("Route order (top to bottom):"), routeInput, routeList, routeControls);
 
     WebView attractionsView = new WebView();
+    attractionsView.getEngine().setJavaScriptEnabled(true);
     attractionsView.setPrefHeight(200);
+    Label contentPaneTitle = new Label("Route Explorer");
+    Button exploreScreen = new Button("Main");
+    Button bookingScreen = new Button("Booking.com");
+    Button guideScreen = new Button("City Guide");
     Button backToMain = new Button("Back to main");
     backToMain.setStyle("-fx-background-color: rgba(255,255,255,0.9);"
         + "-fx-border-color: #cccccc;"
         + "-fx-border-radius: 4;"
         + "-fx-background-radius: 4;");
-    StackPane attractionsPane = new StackPane(attractionsView, backToMain);
-    StackPane.setAlignment(backToMain, Pos.TOP_RIGHT);
-    StackPane.setMargin(backToMain, new javafx.geometry.Insets(6, 8, 0, 0));
+    HBox contentToolbar = new HBox(8, contentPaneTitle, exploreScreen, bookingScreen, guideScreen, backToMain);
+    contentToolbar.setAlignment(Pos.CENTER_LEFT);
+    HBox.setHgrow(contentPaneTitle, Priority.ALWAYS);
+    VBox attractionsPane = new VBox(8, contentToolbar, attractionsView);
+    VBox.setVgrow(attractionsView, Priority.ALWAYS);
 
     Label travelLabel = new Label("Travel date/time:");
     DatePicker travelDatePicker = new DatePicker();
@@ -141,18 +159,37 @@ public class Main extends Application {
     travelControls.setAlignment(Pos.CENTER_LEFT);
 
     TableView<RouteLegRow> priceTable = buildPriceTable();
-    TextField aiQuestion = new TextField();
-    aiQuestion.setPromptText("Ask AI about selected leg alerts");
-    aiQuestion.setPrefWidth(320);
-    Button askAi = new Button("Ask AI");
-    Label aiContext = new Label("Selected leg: None");
-    TextArea aiResponse = new TextArea();
-    aiResponse.setEditable(false);
-    aiResponse.setWrapText(true);
-    aiResponse.setPrefRowCount(3);
-    HBox aiBar = new HBox(8, aiQuestion, askAi);
-    VBox aiPane = new VBox(6, new Label("AI Alerts"), aiContext, aiBar, aiResponse);
-    VBox pricePane = new VBox(8, travelControls, priceTable, aiPane);
+    Label bookingDeskContext = new Label("Selected leg: None");
+    TextField bookingVendorField = new TextField();
+    bookingVendorField.setPromptText("Booked property or vendor");
+    TextField bookingBaseCostField = new TextField();
+    bookingBaseCostField.setPromptText("Booked base cost");
+    TextField bookingFeesField = new TextField();
+    bookingFeesField.setPromptText("Taxes and fees");
+    TextField bookingReferenceField = new TextField();
+    bookingReferenceField.setPromptText("Booking reference");
+    TextArea bookingNotesArea = new TextArea();
+    bookingNotesArea.setPromptText("Add the exact room, fare class, cancellation terms, or client billing note.");
+    bookingNotesArea.setPrefRowCount(3);
+    Button openBookingLink = new Button("Open Booking.com");
+    Button saveBookingSync = new Button("Sync Booking");
+    Button clearBookingSync = new Button("Clear Sync");
+    TextArea routeBriefArea = new TextArea();
+    routeBriefArea.setEditable(false);
+    routeBriefArea.setWrapText(true);
+    routeBriefArea.setPrefRowCount(6);
+    HBox bookingCostBar = new HBox(8, bookingBaseCostField, bookingFeesField, bookingReferenceField);
+    HBox bookingSyncActions = new HBox(8, openBookingLink, saveBookingSync, clearBookingSync);
+    VBox bookingPane = new VBox(6,
+        new Label("Booking Sync"),
+        bookingDeskContext,
+        bookingVendorField,
+        bookingCostBar,
+        bookingNotesArea,
+        bookingSyncActions,
+        new Label("Travel Brief"),
+        routeBriefArea);
+    VBox pricePane = new VBox(8, travelControls, priceTable, bookingPane);
     VBox.setVgrow(priceTable, Priority.ALWAYS);
     priceTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
 
@@ -168,10 +205,18 @@ public class Main extends Application {
 
     Button reportButton = new Button();
     reportButton.setGraphic(buildReportIcon());
-    reportButton.setTooltip(new Tooltip("Toggle report details"));
-    Label reportHint = new Label("Click a bar segment for details.");
-    HBox reportHeader = new HBox(8, new Label("Expense Reports"), reportButton, reportHint);
+    reportButton.setTooltip(new Tooltip("Toggle drilldown details"));
+    ComboBox<String> reportFilter = new ComboBox<>();
+    reportFilter.getItems().addAll("Receipts", "Booked Travel", "Pending Receipts", "All Legs");
+    reportFilter.getSelectionModel().selectFirst();
+    Label reportHint = new Label("Drill down, print, and review booked-vs-estimate variance.");
+    HBox reportHeader = new HBox(8, new Label("Expense Reports"), reportButton, reportFilter, reportHint);
     reportHeader.setAlignment(Pos.CENTER_LEFT);
+    Label reportSummary = new Label("Booked total: $0.00 | Receipts: 0 | Pending receipts: 0");
+    Button printReportButton = new Button("Print");
+    Button exportReportButton = new Button("Open Summary");
+    HBox reportActions = new HBox(8, reportSummary, printReportButton, exportReportButton);
+    reportActions.setAlignment(Pos.CENTER_LEFT);
 
     ListView<RouteLegRow> reportList = new ListView<>();
     reportList.setPrefHeight(140);
@@ -195,10 +240,10 @@ public class Main extends Application {
     reportDetailsBox.setVisible(false);
     reportDetailsBox.setManaged(false);
 
-    VBox reportingPane = new VBox(8, reportHeader, spendChart, reportDetailsBox);
+    VBox reportingPane = new VBox(8, reportHeader, reportActions, spendChart, reportDetailsBox);
     VBox.setVgrow(spendChart, Priority.ALWAYS);
 
-    Label agendaTitle = new Label("Business Agenda");
+    Label agendaTitle = new Label("Business Traveler Workspace");
     ComboBox<String> agendaCitySelect = new ComboBox<>();
     agendaCitySelect.setPromptText("Select city");
     ListView<String> agendaList = new ListView<>();
@@ -212,16 +257,19 @@ public class Main extends Application {
     Button agendaDown = new Button("Move Down");
     HBox agendaInputBar = new HBox(8, agendaInput, addAgenda, removeAgenda);
     HBox agendaOrderBar = new HBox(8, agendaUp, agendaDown);
-
-    Label sbaTitle = new Label("SBA Office (Networking)");
-    ComboBox<String> sbaOfficeSelect = new ComboBox<>();
-    sbaOfficeSelect.setPromptText("Select SBA office");
-    Label sbaSelectedLabel = new Label("No SBA office selected.");
-    Button addSbaVisit = new Button("Add SBA Visit");
-    Button alignSbaVisit = new Button("Align SBA Visit");
-    HBox sbaActions = new HBox(8, addSbaVisit, alignSbaVisit);
+    TextArea meetingGoalsArea = new TextArea();
+    meetingGoalsArea.setPromptText("Meeting goals, client objectives, and decision targets");
+    meetingGoalsArea.setPrefRowCount(3);
+    TextArea stakeholderArea = new TextArea();
+    stakeholderArea.setPromptText("Stakeholders, venues, and follow-up owners");
+    stakeholderArea.setPrefRowCount(3);
+    TextArea logisticsArea = new TextArea();
+    logisticsArea.setPromptText("Hotel, ground transport, workspace, and reimbursement notes");
+    logisticsArea.setPrefRowCount(3);
     VBox businessPane = new VBox(8, agendaTitle, agendaCitySelect, agendaList, agendaInputBar,
-        agendaOrderBar, sbaTitle, sbaOfficeSelect, sbaSelectedLabel, sbaActions);
+        agendaOrderBar, new Label("Meeting Goals"), meetingGoalsArea,
+        new Label("Stakeholders and Venues"), stakeholderArea,
+        new Label("Travel Logistics"), logisticsArea);
     businessPane.setMinHeight(260);
 
     routeBox.setMinHeight(200);
@@ -259,33 +307,52 @@ public class Main extends Application {
 
     // loadMap(webView, status, address);
     loadRouteData(webView, status, priceTable, routeCities);
-    loadAttractions(attractionsView, routeCities);
+    installExternalLinkHandler(attractionsView,
+        () -> loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0],
+            contentMode[0]));
+    loadContentPane(attractionsView, contentPaneTitle, routeCities, selectedContentCity[0], contentMode[0]);
 
     moveUp.setOnAction(event -> moveSelected(routeList, -1));
     moveDown.setOnAction(event -> moveSelected(routeList, 1));
     removeStop.setOnAction(event -> removeSelected(routeList));
     recalc.setOnAction(event -> {
       List<String> ordered = new ArrayList<>(routeList.getItems());
+      currentRouteCities[0] = ordered;
+      selectedContentCity[0] = chooseActiveCity(ordered, selectedContentCity[0]);
       loadRouteData(webView, status, priceTable, ordered);
-      loadAttractions(attractionsView, ordered);
+      loadContentPane(attractionsView, contentPaneTitle, ordered, selectedContentCity[0], contentMode[0]);
     });
-    askAi.setOnAction(event -> askAiForSelection(priceTable, aiQuestion, aiResponse, aiContext));
     addStop.setOnAction(event -> addRouteStop(routeSearch, routeList));
     routeSearch.setOnAction(event -> addRouteStop(routeSearch, routeList));
     backToMain.setOnAction(event -> {
-      routeList.requestFocus();
-      routeList.getSelectionModel().selectFirst();
+      contentMode[0] = "overview";
+      loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0], contentMode[0]);
+    });
+    exploreScreen.setOnAction(event -> {
+      contentMode[0] = "overview";
+      loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0], contentMode[0]);
+    });
+    bookingScreen.setOnAction(event -> {
+      contentMode[0] = "booking";
+      loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0], contentMode[0]);
+    });
+    guideScreen.setOnAction(event -> {
+      contentMode[0] = "guide";
+      loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0], contentMode[0]);
     });
 
-    Runnable spendUpdater = () -> updateMonthlySpend(priceTable, spendChart, reportList, reportDetails);
+    Runnable spendUpdater = () -> updateMonthlySpend(priceTable, spendChart, reportList, reportDetails,
+        reportSummary, reportFilter.getValue());
     priceTable.setUserData(spendUpdater);
-    updateMonthlySpend(priceTable, spendChart, reportList, reportDetails);
+    updateMonthlySpend(priceTable, spendChart, reportList, reportDetails, reportSummary, reportFilter.getValue());
 
     priceTable.getSelectionModel().selectedItemProperty().addListener((obs, oldRow, newRow) -> {
       if (newRow == null) {
         travelDatePicker.setValue(null);
         travelTimePicker.setValue(null);
-        updateAiPanel(null, aiQuestion, aiResponse, aiContext);
+        populateBookingSyncFields(null, bookingDeskContext, bookingVendorField, bookingBaseCostField,
+            bookingFeesField, bookingReferenceField, bookingNotesArea);
+        routeBriefArea.setText("Select a route leg to see live weather, attractions, and booking sync fields.");
         return;
       }
       travelDatePicker.setValue(newRow.getTravelDate());
@@ -295,7 +362,18 @@ public class Main extends Application {
       } else {
         travelTimePicker.setValue(time);
       }
-      updateAiPanel(newRow, aiQuestion, aiResponse, aiContext);
+      populateBookingSyncFields(newRow, bookingDeskContext, bookingVendorField, bookingBaseCostField,
+          bookingFeesField, bookingReferenceField, bookingNotesArea);
+      loadTravelBrief(newRow, routeBriefArea);
+    });
+    loadTravelBrief(priceTable.getSelectionModel().getSelectedItem(), routeBriefArea);
+
+    routeList.getSelectionModel().selectedItemProperty().addListener((obs, oldCity, newCity) -> {
+      if (newCity == null || newCity.isBlank()) {
+        return;
+      }
+      selectedContentCity[0] = newCity;
+      loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0], contentMode[0]);
     });
 
     setTravelTime.setOnAction(event -> {
@@ -326,6 +404,10 @@ public class Main extends Application {
       reportDetailsBox.setVisible(next);
       reportDetailsBox.setManaged(next);
     });
+    reportFilter.setOnAction(event -> updateMonthlySpend(priceTable, spendChart, reportList, reportDetails,
+        reportSummary, reportFilter.getValue()));
+    printReportButton.setOnAction(event -> printReportView(reportList.getItems(), reportFilter.getValue()));
+    exportReportButton.setOnAction(event -> openReportSummary(reportList.getItems(), reportFilter.getValue()));
 
     reportList.getSelectionModel().selectedItemProperty().addListener((obs, oldRow, newRow) -> {
       if (newRow == null) {
@@ -335,10 +417,17 @@ public class Main extends Application {
       }
     });
 
-    refreshAgendaCities(routeList, agendaCitySelect, agendaList, sbaOfficeSelect, sbaSelectedLabel);
-    agendaCitySelect.setOnAction(event -> updateAgendaForCity(agendaCitySelect, agendaList, sbaOfficeSelect, sbaSelectedLabel));
+    refreshAgendaCities(routeList, agendaCitySelect, agendaList);
+    agendaCitySelect.setOnAction(event -> {
+      updateAgendaForCity(agendaCitySelect, agendaList);
+      loadBusinessTripProfile(agendaCitySelect.getValue(), meetingGoalsArea, stakeholderArea, logisticsArea);
+    });
     routeList.getItems().addListener((ListChangeListener<String>) change -> {
-      refreshAgendaCities(routeList, agendaCitySelect, agendaList, sbaOfficeSelect, sbaSelectedLabel);
+      currentRouteCities[0] = new ArrayList<>(routeList.getItems());
+      selectedContentCity[0] = chooseActiveCity(currentRouteCities[0], selectedContentCity[0]);
+      loadContentPane(attractionsView, contentPaneTitle, currentRouteCities[0], selectedContentCity[0], contentMode[0]);
+      refreshAgendaCities(routeList, agendaCitySelect, agendaList);
+      loadBusinessTripProfile(agendaCitySelect.getValue(), meetingGoalsArea, stakeholderArea, logisticsArea);
     });
 
     addAgenda.setOnAction(event -> addAgendaItem(agendaInput, agendaList));
@@ -347,17 +436,18 @@ public class Main extends Application {
     agendaUp.setOnAction(event -> moveAgendaItem(agendaList, -1));
     agendaDown.setOnAction(event -> moveAgendaItem(agendaList, 1));
 
-    sbaOfficeSelect.setOnAction(event -> {
-      String city = agendaCitySelect.getValue();
-      String office = sbaOfficeSelect.getValue();
-      if (city == null || office == null || office.isBlank()) {
-        return;
-      }
-      SBA_SELECTIONS.put(normalizePlaceKey(city), office);
-      sbaSelectedLabel.setText(office);
-    });
-    addSbaVisit.setOnAction(event -> addSbaVisit(agendaCitySelect, agendaList, sbaOfficeSelect, false));
-    alignSbaVisit.setOnAction(event -> addSbaVisit(agendaCitySelect, agendaList, sbaOfficeSelect, true));
+    loadBusinessTripProfile(agendaCitySelect.getValue(), meetingGoalsArea, stakeholderArea, logisticsArea);
+    meetingGoalsArea.textProperty().addListener((obs, oldText, newText) ->
+        saveBusinessTripProfile(agendaCitySelect.getValue(), meetingGoalsArea, stakeholderArea, logisticsArea));
+    stakeholderArea.textProperty().addListener((obs, oldText, newText) ->
+        saveBusinessTripProfile(agendaCitySelect.getValue(), meetingGoalsArea, stakeholderArea, logisticsArea));
+    logisticsArea.textProperty().addListener((obs, oldText, newText) ->
+        saveBusinessTripProfile(agendaCitySelect.getValue(), meetingGoalsArea, stakeholderArea, logisticsArea));
+    openBookingLink.setOnAction(event -> openSelectedBookingLink(priceTable));
+    saveBookingSync.setOnAction(event -> saveBookingSync(priceTable, bookingVendorField, bookingBaseCostField,
+        bookingFeesField, bookingReferenceField, bookingNotesArea, routeBriefArea));
+    clearBookingSync.setOnAction(event -> clearBookingSync(priceTable, bookingDeskContext, bookingVendorField,
+        bookingBaseCostField, bookingFeesField, bookingReferenceField, bookingNotesArea, routeBriefArea));
   }
 
   private static LinkedList<String> setAddress(String street, String zipcode) {
@@ -402,7 +492,6 @@ public class Main extends Application {
           table.getSelectionModel().selectFirst();
         }
         triggerSpendUpdate(table);
-        populateLiveAlerts(table);
       });
     }, "price-worker");
     worker.setDaemon(true);
@@ -422,19 +511,48 @@ public class Main extends Application {
           table.getSelectionModel().selectFirst();
         }
         triggerSpendUpdate(table);
-        populateLiveAlerts(table);
       });
     }, "route-data-worker");
     worker.setDaemon(true);
     worker.start();
   }
 
-  private static void loadAttractions(WebView webView, List<String> cities) {
+  private static void loadContentPane(WebView webView, Label titleLabel, List<String> cities, String selectedCity,
+      String mode) {
+    List<String> citySnapshot = cities == null ? List.of() : new ArrayList<>(cities);
+    String activeCity = chooseActiveCity(citySnapshot, selectedCity);
+    if ("booking".equals(mode)) {
+      Thread worker = new Thread(() -> {
+        String html = buildBookingHubHtml(activeCity);
+        Platform.runLater(() -> {
+          titleLabel.setText("Booking Hub: " + activeCity);
+          webView.getEngine().loadContent(html);
+        });
+      }, "booking-hub-worker");
+      worker.setDaemon(true);
+      worker.start();
+      return;
+    }
+    if ("guide".equals(mode)) {
+      Thread worker = new Thread(() -> {
+        String html = buildCityGuideHtml(activeCity);
+        Platform.runLater(() -> {
+          titleLabel.setText("City Guide: " + activeCity);
+          webView.getEngine().loadContent(html);
+        });
+      }, "city-guide-worker");
+      worker.setDaemon(true);
+      worker.start();
+      return;
+    }
     Thread worker = new Thread(() -> {
-      List<Attraction> attractions = fetchAttractions(cities);
-      String html = buildAttractionsHtml(attractions);
-      Platform.runLater(() -> webView.getEngine().loadContent(html));
-    }, "attractions-worker");
+      List<Attraction> attractions = fetchAttractions(citySnapshot);
+      String html = buildAttractionsHtml(attractions, activeCity, citySnapshot);
+      Platform.runLater(() -> {
+        titleLabel.setText("Route Explorer: " + activeCity);
+        webView.getEngine().loadContent(html);
+      });
+    }, "content-pane-worker");
     worker.setDaemon(true);
     worker.start();
   }
@@ -843,15 +961,24 @@ public class Main extends Application {
     }
   }
 
-  private static String buildAttractionsHtml(List<Attraction> attractions) {
+  private static String buildAttractionsHtml(List<Attraction> attractions, String selectedCity, List<String> routeCities) {
     Map<String, List<Attraction>> byCity = new LinkedHashMap<>();
     for (Attraction attraction : attractions) {
       byCity.computeIfAbsent(attraction.city, key -> new ArrayList<>()).add(attraction);
     }
+    String activeCity = chooseActiveCity(routeCities, selectedCity);
     StringBuilder html = new StringBuilder();
     html.append("<!doctype html><html><head><meta charset='utf-8'/>")
         .append("<style>")
-        .append("body{font-family:Arial,sans-serif;margin:0;background:#f7f7f7;}")
+        .append("body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(180deg,#eef5ff,#f7f9fc);color:#17324d;}")
+        .append(".hero{padding:14px 16px 8px 16px;background:#ffffff;border-bottom:1px solid #d7e2ee;}")
+        .append(".hero h1{margin:0 0 4px 0;font-size:18px;}")
+        .append(".hero p{margin:0;color:#516b86;font-size:12px;}")
+        .append(".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}")
+        .append(".action{display:inline-block;padding:8px 12px;border-radius:999px;text-decoration:none;font-size:12px;font-weight:bold;}")
+        .append(".booking{background:#003b95;color:#fff;}")
+        .append(".guide{background:#0f766e;color:#fff;}")
+        .append(".news{background:#17324d;color:#fff;}")
         .append(".section{padding:10px 12px 4px 12px;}")
         .append(".title{font-size:14px;font-weight:bold;margin:0 0 6px 0;}")
         .append(".carousel{display:flex;gap:10px;overflow-x:auto;padding-bottom:10px;scroll-snap-type:x mandatory;}")
@@ -862,20 +989,33 @@ public class Main extends Application {
         .append(".img img{width:100%;height:100%;object-fit:cover;border-top-left-radius:8px;border-top-right-radius:8px;}")
         .append(".name{padding:8px 10px;font-size:12px;font-weight:bold;}")
         .append(".link{padding:0 10px 10px 10px;font-size:11px;color:#2b6cb0;}")
+        .append(".meta{padding:0 10px 8px 10px;font-size:11px;color:#5d7186;}")
         .append("</style></head><body>");
+
+    html.append("<div class='hero'>")
+        .append("<h1>").append(escapeHtml(activeCity)).append("</h1>")
+        .append("<p>Use the buttons above to switch between the in-app explorer, Booking.com, and the built-in city guide for this city.</p>")
+        .append("<div class='actions'>")
+        .append("<a class='action booking' href='").append(externalLinkHref(buildBookingUrl(activeCity))).append("'>Book stay</a>")
+        .append("<a class='action guide' href='").append(externalLinkHref(buildGuideSearchUrl(activeCity + " restaurants attractions"))).append("'>City guide search</a>")
+        .append("<a class='action news' href='").append(externalLinkHref(buildCityNewsUrl(activeCity))).append("'>Verify in news</a>")
+        .append("</div></div>");
 
     if (byCity.isEmpty()) {
       html.append("<div class='section'><div class='title'>Attractions</div>")
           .append("<div>No attractions found.</div></div>");
     }
 
-    for (Map.Entry<String, List<Attraction>> entry : byCity.entrySet()) {
+    List<String> orderedCities = new ArrayList<>(byCity.keySet());
+    orderedCities.sort(Comparator.comparing(city -> !city.equalsIgnoreCase(activeCity)));
+    for (String city : orderedCities) {
+      List<Attraction> cityAttractions = byCity.getOrDefault(city, List.of());
       html.append("<div class='section'>")
-          .append("<div class='title'>").append(escapeHtml(entry.getKey())).append("</div>")
+          .append("<div class='title'>").append(escapeHtml(city)).append("</div>")
           .append("<div class='carousel'>");
-      for (Attraction attraction : entry.getValue()) {
+      for (Attraction attraction : cityAttractions) {
         String image = attraction.imageUrl != null ? attraction.imageUrl : "";
-        html.append("<a class='card' href='").append(escapeHtml(attraction.link)).append("'>")
+        html.append("<a class='card' href='").append(externalLinkHref(attraction.link)).append("'>")
             .append("<div class='img'>");
         if (!image.isBlank()) {
           html.append("<img src='").append(escapeHtml(image)).append("'/>");
@@ -884,6 +1024,7 @@ public class Main extends Application {
         }
         html.append("</div>")
             .append("<div class='name'>").append(escapeHtml(attraction.title)).append("</div>")
+            .append("<div class='meta'>").append(escapeHtml(city)).append("</div>")
             .append("<div class='link'>Wikipedia</div>")
             .append("</a>");
       }
@@ -891,6 +1032,538 @@ public class Main extends Application {
     }
     html.append("</body></html>");
     return html.toString();
+  }
+
+  private static String chooseActiveCity(List<String> cities, String preferredCity) {
+    if (preferredCity != null && !preferredCity.isBlank()) {
+      for (String city : cities) {
+        if (city != null && city.equalsIgnoreCase(preferredCity)) {
+          return city;
+        }
+      }
+    }
+    if (cities == null || cities.isEmpty()) {
+      return "Destination";
+    }
+    return cities.get(0);
+  }
+
+  private static String buildBookingUrl(String city) {
+    return "https://www.booking.com/searchresults.html?ss=" + encodePathSegment(city);
+  }
+
+  private static String buildGuideSearchUrl(String query) {
+    return "https://www.google.com/search?q=" + encodePathSegment(query);
+  }
+
+  private static String buildCityGuideHtml(String city) {
+    List<Attraction> attractions = fetchAttractions(List.of(city));
+    List<Restaurant> restaurants = fetchRestaurants(city);
+    StringBuilder html = new StringBuilder();
+    html.append("<!doctype html><html><head><meta charset='utf-8'/>")
+        .append("<style>")
+        .append("body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(180deg,#f4fbf8,#eef5ff);color:#17324d;}")
+        .append(".hero{padding:14px 16px;background:#ffffff;border-bottom:1px solid #dbe6f0;}")
+        .append(".hero h1{margin:0 0 4px 0;font-size:20px;}")
+        .append(".hero p{margin:0;color:#526b83;font-size:12px;}")
+        .append(".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}")
+        .append(".action{display:inline-block;padding:8px 12px;border-radius:999px;text-decoration:none;font-size:12px;font-weight:bold;}")
+        .append(".search{background:#0f766e;color:#fff;}")
+        .append(".booking{background:#003b95;color:#fff;}")
+        .append(".section{padding:12px 16px 4px 16px;}")
+        .append(".section h2{margin:0 0 8px 0;font-size:15px;}")
+        .append(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}")
+        .append(".card{background:#fff;border:1px solid #dce7f3;border-radius:12px;padding:12px;box-shadow:0 2px 6px rgba(15,23,42,0.06);}")
+        .append(".card h3{margin:0 0 6px 0;font-size:14px;}")
+        .append(".meta{font-size:12px;color:#5d7186;line-height:1.5;}")
+        .append(".link{display:inline-block;margin-top:8px;font-size:12px;color:#1d4ed8;text-decoration:none;font-weight:bold;}")
+        .append("</style></head><body>");
+    html.append("<div class='hero'>")
+        .append("<h1>").append(escapeHtml(city)).append(" City Guide</h1>")
+        .append("<p>In-app restaurants and attractions view built from accessible public data sources.</p>")
+        .append("<div class='actions'>")
+        .append("<a class='action search' href='").append(externalLinkHref(buildGuideSearchUrl(city + " restaurants attractions"))).append("'>Search more spots</a>")
+        .append("<a class='action booking' href='").append(externalLinkHref(buildBookingUrl(city))).append("'>Open Booking.com</a>")
+        .append("</div></div>");
+
+    html.append("<div class='section'><h2>Restaurants</h2><div class='grid'>");
+    if (restaurants.isEmpty()) {
+      html.append("<div class='card'><h3>No restaurant data loaded</h3><div class='meta'>Open the external search to inspect nearby dining in ")
+          .append(escapeHtml(city)).append(".</div></div>");
+    } else {
+      for (Restaurant restaurant : restaurants) {
+        html.append("<div class='card'><h3>").append(escapeHtml(restaurant.name)).append("</h3>")
+            .append("<div class='meta'>Cuisine: ").append(escapeHtml(restaurant.cuisine)).append("</div>")
+            .append("<div class='meta'>Area: ").append(escapeHtml(restaurant.area)).append("</div>")
+            .append("</div>");
+      }
+    }
+    html.append("</div></div>");
+
+    html.append("<div class='section'><h2>Attractions</h2><div class='grid'>");
+    if (attractions.isEmpty()) {
+      html.append("<div class='card'><h3>No attractions loaded</h3><div class='meta'>Wikipedia attraction summaries were not available for this city.</div></div>");
+    } else {
+      for (Attraction attraction : attractions) {
+        html.append("<div class='card'><h3>").append(escapeHtml(attraction.title)).append("</h3>")
+            .append("<div class='meta'>City: ").append(escapeHtml(attraction.city)).append("</div>")
+            .append("<a class='link' href='").append(externalLinkHref(attraction.link)).append("'>Open source</a>")
+            .append("</div>");
+      }
+    }
+    html.append("</div></div></body></html>");
+    return html.toString();
+  }
+
+  private static String buildBookingHubHtml(String city) {
+    List<HotelOption> hotels = fetchHotels(city);
+    StringBuilder html = new StringBuilder();
+    html.append("<!doctype html><html><head><meta charset='utf-8'/>")
+        .append("<style>")
+        .append("body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(180deg,#eff6ff,#f8fafc);color:#17324d;}")
+        .append(".hero{padding:16px;background:#fff;border-bottom:1px solid #dce7f3;}")
+        .append(".hero h1{margin:0 0 6px 0;font-size:20px;}")
+        .append(".hero p{margin:0;color:#5d7186;font-size:12px;line-height:1.5;}")
+        .append(".actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}")
+        .append(".action{display:inline-block;padding:8px 12px;border-radius:999px;text-decoration:none;font-size:12px;font-weight:bold;}")
+        .append(".booking{background:#003b95;color:#fff;}")
+        .append(".search{background:#0f766e;color:#fff;}")
+        .append(".section{padding:12px 16px;}")
+        .append(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}")
+        .append(".card{background:#fff;border:1px solid #dce7f3;border-radius:12px;padding:12px;box-shadow:0 2px 8px rgba(15,23,42,0.05);}")
+        .append(".card h3{margin:0 0 6px 0;font-size:14px;}")
+        .append(".meta{font-size:12px;color:#5d7186;line-height:1.5;}")
+        .append("</style></head><body>");
+    html.append("<div class='hero'><h1>").append(escapeHtml(city)).append(" Booking Hub</h1>")
+        .append("<p>Open Booking.com in your browser, complete the reservation, then sync the exact vendor, rate, fees, and confirmation back into the selected travel leg.</p>")
+        .append("<div class='actions'>")
+        .append("<a class='action booking' href='").append(externalLinkHref(buildBookingUrl(city))).append("'>Open Booking.com</a>")
+        .append("<a class='action search' href='").append(externalLinkHref(buildGuideSearchUrl(city + " hotels"))).append("'>Search hotels</a>")
+        .append("</div></div>");
+    html.append("<div class='section'><div class='grid'>");
+    if (hotels.isEmpty()) {
+      html.append("<div class='card'><h3>No local hotel feed loaded</h3><div class='meta'>Use the Booking.com button above and sync the final booked amount in the Booking Sync panel.</div></div>");
+    } else {
+      for (HotelOption hotel : hotels) {
+        html.append("<div class='card'><h3>").append(escapeHtml(hotel.name)).append("</h3>")
+            .append("<div class='meta'>Type: ").append(escapeHtml(hotel.type)).append("</div>")
+            .append("<div class='meta'>Area: ").append(escapeHtml(hotel.area)).append("</div>")
+            .append("</div>");
+      }
+    }
+    html.append("</div></div></body></html>");
+    return html.toString();
+  }
+
+  private static List<Restaurant> fetchRestaurants(String city) {
+    List<Restaurant> cached = RESTAURANT_CACHE.get(city);
+    if (cached != null) {
+      return cached;
+    }
+    double[] latLon = geocode(city);
+    if (latLon == null) {
+      return List.of();
+    }
+    List<Restaurant> restaurants = new ArrayList<>();
+    try {
+      String query = "[out:json][timeout:12];("
+          + "node[\"amenity\"=\"restaurant\"](around:4000," + latLon[0] + "," + latLon[1] + ");"
+          + "way[\"amenity\"=\"restaurant\"](around:4000," + latLon[0] + "," + latLon[1] + ");"
+          + "relation[\"amenity\"=\"restaurant\"](around:4000," + latLon[0] + "," + latLon[1] + ");"
+          + ");out center 12;";
+      HttpRequest request = HttpRequest.newBuilder(URI.create("https://overpass-api.de/api/interpreter"))
+          .header("Content-Type", "text/plain")
+          .timeout(Duration.ofSeconds(20))
+          .POST(HttpRequest.BodyPublishers.ofString(query))
+          .build();
+      HttpClient client = HttpClient.newBuilder()
+          .connectTimeout(Duration.ofSeconds(10))
+          .build();
+      HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() >= 200 && response.statusCode() < 300) {
+        restaurants.addAll(parseRestaurants(response.body()));
+      }
+    } catch (Exception e) {
+      // Fall back to an empty in-app list and rely on the external search button.
+    }
+    RESTAURANT_CACHE.put(city, restaurants);
+    return restaurants;
+  }
+
+  private static List<HotelOption> fetchHotels(String city) {
+    List<HotelOption> cached = HOTEL_CACHE.get(city);
+    if (cached != null) {
+      return cached;
+    }
+    double[] latLon = geocode(city);
+    if (latLon == null) {
+      return List.of();
+    }
+    List<HotelOption> hotels = new ArrayList<>();
+    try {
+      String query = "[out:json][timeout:12];("
+          + "node[\"tourism\"=\"hotel\"](around:5000," + latLon[0] + "," + latLon[1] + ");"
+          + "way[\"tourism\"=\"hotel\"](around:5000," + latLon[0] + "," + latLon[1] + ");"
+          + "node[\"tourism\"=\"guest_house\"](around:5000," + latLon[0] + "," + latLon[1] + ");"
+          + ");out center 12;";
+      HttpRequest request = HttpRequest.newBuilder(URI.create("https://overpass-api.de/api/interpreter"))
+          .header("Content-Type", "text/plain")
+          .timeout(Duration.ofSeconds(20))
+          .POST(HttpRequest.BodyPublishers.ofString(query))
+          .build();
+      HttpClient client = HttpClient.newBuilder()
+          .connectTimeout(Duration.ofSeconds(10))
+          .build();
+      HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() >= 200 && response.statusCode() < 300) {
+        hotels.addAll(parseHotels(response.body()));
+      }
+    } catch (Exception e) {
+      return List.of();
+    }
+    HOTEL_CACHE.put(city, hotels);
+    return hotels;
+  }
+
+  private static List<HotelOption> parseHotels(String body) {
+    if (body == null || body.isBlank()) {
+      return List.of();
+    }
+    List<HotelOption> hotels = new ArrayList<>();
+    Pattern pattern = Pattern.compile("\"tags\"\\s*:\\s*\\{(.*?)\\}", Pattern.DOTALL);
+    Matcher matcher = pattern.matcher(body);
+    while (matcher.find() && hotels.size() < 8) {
+      String tags = matcher.group(1);
+      String name = matchField(tags, "\"name\"\\s*:\\s*\"(.*?)\"");
+      if (name == null || name.isBlank()) {
+        continue;
+      }
+      String type = matchField(tags, "\"tourism\"\\s*:\\s*\"(.*?)\"");
+      String area = matchField(tags, "\"addr:street\"\\s*:\\s*\"(.*?)\"");
+      if (area == null || area.isBlank()) {
+        area = matchField(tags, "\"addr:suburb\"\\s*:\\s*\"(.*?)\"");
+      }
+      hotels.add(new HotelOption(name,
+          type == null || type.isBlank() ? "Hotel" : type.replace('_', ' '),
+          area == null || area.isBlank() ? "Central area" : area));
+    }
+    return hotels;
+  }
+
+  private static List<Restaurant> parseRestaurants(String body) {
+    if (body == null || body.isBlank()) {
+      return List.of();
+    }
+    List<Restaurant> restaurants = new ArrayList<>();
+    Pattern pattern = Pattern.compile("\"tags\"\\s*:\\s*\\{(.*?)\\}", Pattern.DOTALL);
+    Matcher matcher = pattern.matcher(body);
+    while (matcher.find() && restaurants.size() < 8) {
+      String tags = matcher.group(1);
+      String name = matchField(tags, "\"name\"\\s*:\\s*\"(.*?)\"");
+      if (name == null || name.isBlank()) {
+        continue;
+      }
+      String cuisine = matchField(tags, "\"cuisine\"\\s*:\\s*\"(.*?)\"");
+      String area = matchField(tags, "\"addr:suburb\"\\s*:\\s*\"(.*?)\"");
+      if (area == null || area.isBlank()) {
+        area = matchField(tags, "\"addr:street\"\\s*:\\s*\"(.*?)\"");
+      }
+      restaurants.add(new Restaurant(name,
+          cuisine == null || cuisine.isBlank() ? "Local dining" : cuisine.replace(";", ", "),
+          area == null || area.isBlank() ? "City center area" : area));
+    }
+    return restaurants;
+  }
+
+  private static String buildCityNewsUrl(String city) {
+    return "https://news.google.com/search?q=" + encodePathSegment(city + " travel alerts");
+  }
+
+  private static String externalLinkHref(String url) {
+    return "app-external:" + encodePathSegment(url);
+  }
+
+  private static void installExternalLinkHandler(WebView webView, Runnable onReturn) {
+    WebEngine engine = webView.getEngine();
+    engine.locationProperty().addListener((obs, oldLocation, newLocation) -> {
+      if (newLocation == null || !newLocation.startsWith("app-external:")) {
+        return;
+      }
+      openExternalLink(newLocation.substring("app-external:".length()));
+      Platform.runLater(onReturn);
+    });
+  }
+
+  private static void openExternalLink(String encodedUrl) {
+    try {
+      String decoded = URLDecoder.decode(encodedUrl, StandardCharsets.UTF_8);
+      if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+        Desktop.getDesktop().browse(URI.create(decoded));
+      }
+    } catch (Exception e) {
+      // Ignore browser launch failures and keep the app responsive.
+    }
+  }
+
+  private static String buildAiCardHtml(RouteLegRow row) {
+    StringBuilder html = new StringBuilder();
+    html.append("<!doctype html><html><head><meta charset='utf-8'/>")
+        .append("<style>")
+        .append("body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(180deg,#0f172a,#18283d);color:#eff6ff;}")
+        .append(".card{padding:14px 16px;}")
+        .append(".title{font-size:18px;font-weight:bold;margin:0 0 4px 0;}")
+        .append(".subtitle{font-size:12px;color:#b9c9de;margin:0 0 12px 0;}")
+        .append(".chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}")
+        .append(".chip{padding:6px 10px;border-radius:999px;background:#1e3a5f;color:#dbeafe;font-size:11px;font-weight:bold;}")
+        .append(".grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}")
+        .append(".pane{background:rgba(255,255,255,0.08);border:1px solid rgba(191,219,254,0.18);border-radius:12px;padding:10px 12px;}")
+        .append(".pane strong{display:block;font-size:12px;margin-bottom:4px;color:#bfdbfe;}")
+        .append(".pane span{font-size:12px;line-height:1.45;display:block;}")
+        .append(".takeaways{margin-top:12px;background:#fff;color:#17324d;border-radius:12px;padding:12px;}")
+        .append(".takeaways h2{margin:0 0 8px 0;font-size:14px;}")
+        .append(".takeaways ul{margin:0;padding-left:18px;}")
+        .append(".takeaways li{margin:0 0 6px 0;font-size:12px;}")
+        .append(".sources{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;}")
+        .append(".source{display:inline-block;padding:8px 10px;border-radius:999px;background:#f8fafc;color:#17324d;text-decoration:none;font-size:12px;font-weight:bold;}")
+        .append(".empty{padding:18px;color:#dbeafe;font-size:12px;}")
+        .append("</style></head><body>");
+    if (row == null) {
+      html.append("<div class='empty'>Select a route leg to see AI takeaways, verification links, and live weather context.</div>");
+      html.append("</body></html>");
+      return html.toString();
+    }
+
+    Map<String, String> fields = parseAlertFields(row.getAiSuggestion());
+    List<String> takeaways = buildAlertTakeaways(row, fields);
+    html.append("<div class='card'>")
+        .append("<div class='title'>").append(escapeHtml(row.getFrom())).append(" to ")
+        .append(escapeHtml(row.getTo())).append("</div>")
+        .append("<div class='subtitle'>Smart route card for ").append(escapeHtml(row.getMode()))
+        .append(" with AI summary, live weather context, and verification links.</div>")
+        .append("<div class='chips'>")
+        .append("<div class='chip'>").append(escapeHtml(row.getMode())).append("</div>")
+        .append("<div class='chip'>").append(escapeHtml(formatCurrency(row.getCost()))).append("</div>")
+        .append("<div class='chip'>").append(escapeHtml(formatDuration(row.getHours()))).append("</div>")
+        .append("</div>")
+        .append("<div class='grid'>")
+        .append(buildInfoPane("🌤️ Weather", fields.get("Weather expected")))
+        .append(buildInfoPane("🚦 Delays", fields.get("Delays with travel")))
+        .append(buildInfoPane("🎭 Events", fields.get("Events in the city")))
+        .append(buildInfoPane("🩺 Health", fields.get("Health warnings")))
+        .append(buildInfoPane("🌫️ Air Quality", fields.get("AQI and hazard information")))
+        .append(buildInfoPane("🧠 User prompt", row.getQuestion() == null || row.getQuestion().isBlank()
+            ? "Using the default route-alert prompt."
+            : row.getQuestion()))
+        .append("</div>")
+        .append("<div class='takeaways'><h2>Key Takeaways</h2><ul>");
+    for (String takeaway : takeaways) {
+      html.append("<li>").append(escapeHtml(takeaway)).append("</li>");
+    }
+    html.append("</ul></div>")
+        .append("<div class='sources'>")
+        .append(buildSourceChip("News", buildRouteNewsUrl(row)))
+        .append(buildSourceChip("Travel delays", buildTravelDelayUrl(row)))
+        .append(buildSourceChip("Weather.com", buildWeatherDotComUrl(row)))
+        .append(buildSourceChip("Open-Meteo", buildOpenMeteoVerifyUrl(row)))
+        .append("</div></div></body></html>");
+    return html.toString();
+  }
+
+  private static String buildInfoPane(String title, String value) {
+    String safeValue = value == null || value.isBlank() ? "Unknown" : value;
+    return "<div class='pane'><strong>" + escapeHtml(title) + "</strong><span>" + escapeHtml(safeValue) + "</span></div>";
+  }
+
+  private static String buildSourceChip(String label, String url) {
+    return "<a class='source' href='" + externalLinkHref(url) + "'>" + escapeHtml(label) + "</a>";
+  }
+
+  private static String renderAiCardHtml(RouteLegRow row) {
+    StringBuilder html = new StringBuilder();
+    html.append("<!doctype html><html><head><meta charset='utf-8'/>")
+        .append("<style>")
+        .append("body{font-family:Arial,sans-serif;margin:0;background:linear-gradient(180deg,#0f172a,#18283d);color:#eff6ff;}")
+        .append(".card{padding:14px 16px;}")
+        .append(".title{font-size:18px;font-weight:bold;margin:0 0 4px 0;}")
+        .append(".subtitle{font-size:12px;color:#b9c9de;margin:0 0 12px 0;}")
+        .append(".chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}")
+        .append(".chip{padding:6px 10px;border-radius:999px;background:#1e3a5f;color:#dbeafe;font-size:11px;font-weight:bold;}")
+        .append(".grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}")
+        .append(".pane{background:rgba(255,255,255,0.08);border:1px solid rgba(191,219,254,0.18);border-radius:12px;padding:10px 12px;}")
+        .append(".pane strong{display:block;font-size:12px;margin-bottom:4px;color:#bfdbfe;}")
+        .append(".pane span{font-size:12px;line-height:1.45;display:block;}")
+        .append(".takeaways{margin-top:12px;background:#fff;color:#17324d;border-radius:12px;padding:12px;}")
+        .append(".takeaways h2{margin:0 0 8px 0;font-size:14px;}")
+        .append(".takeaways ul{margin:0;padding-left:18px;}")
+        .append(".takeaways li{margin:0 0 6px 0;font-size:12px;}")
+        .append(".sources{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;}")
+        .append(".source{display:inline-block;padding:8px 10px;border-radius:999px;background:#f8fafc;color:#17324d;text-decoration:none;font-size:12px;font-weight:bold;}")
+        .append(".empty{padding:18px;color:#dbeafe;font-size:12px;}")
+        .append("</style></head><body>");
+    if (row == null) {
+      html.append("<div class='empty'>Select a route leg to see AI takeaways, verification links, and live weather context.</div>");
+      html.append("</body></html>");
+      return html.toString();
+    }
+
+    Map<String, String> fields = parseAlertFields(row.getAiSuggestion());
+    List<String> takeaways = buildAlertTakeaways(row, fields);
+    html.append("<div class='card'>")
+        .append("<div class='title'>").append(escapeHtml(row.getFrom())).append(" to ")
+        .append(escapeHtml(row.getTo())).append("</div>")
+        .append("<div class='subtitle'>Smart route card for ").append(escapeHtml(row.getMode()))
+        .append(" with AI summary, live weather context, and verification links.</div>")
+        .append("<div class='chips'>")
+        .append("<div class='chip'>").append(escapeHtml(row.getMode())).append("</div>")
+        .append("<div class='chip'>").append(escapeHtml(formatCurrency(row.getCost()))).append("</div>")
+        .append("<div class='chip'>").append(escapeHtml(formatDuration(row.getHours()))).append("</div>")
+        .append("</div>")
+        .append("<div class='grid'>")
+        .append(buildInfoPane("Weather", fields.get("Weather expected")))
+        .append(buildInfoPane("Delays", fields.get("Delays with travel")))
+        .append(buildInfoPane("Events", fields.get("Events in the city")))
+        .append(buildInfoPane("Health", fields.get("Health warnings")))
+        .append(buildInfoPane("Air Quality", fields.get("AQI and hazard information")))
+        .append(buildInfoPane("User Prompt", row.getQuestion() == null || row.getQuestion().isBlank()
+            ? "Using the default route-alert prompt."
+            : row.getQuestion()))
+        .append("</div>")
+        .append("<div class='takeaways'><h2>Key Takeaways</h2><ul>");
+    for (String takeaway : takeaways) {
+      html.append("<li>").append(escapeHtml(takeaway)).append("</li>");
+    }
+    html.append("</ul></div>")
+        .append("<div class='sources'>")
+        .append(buildSourceChip("AI source: " + detectAlertSourceLabel(row.getAiSuggestion()), buildRouteNewsUrl(row)))
+        .append(buildSourceChip("News", buildRouteNewsUrl(row)))
+        .append(buildSourceChip("Travel delays", buildTravelDelayUrl(row)))
+        .append(buildSourceChip("Weather.com", buildWeatherDotComUrl(row)))
+        .append(buildSourceChip("Open-Meteo", buildOpenMeteoVerifyUrl(row)))
+        .append("</div></div></body></html>");
+    return html.toString();
+  }
+
+  private static String detectAlertSourceLabel(String alertText) {
+    if (alertText == null || alertText.isBlank()) {
+      return "Loading";
+    }
+    if (alertText.contains("[Website fallback]")) {
+      return "Website fallback";
+    }
+    Map<String, String> fields = parseAlertFields(alertText);
+    if (allAlertFieldsUnknown(fields)) {
+      return "Loading";
+    }
+    return "OpenAI";
+  }
+
+  private static boolean allAlertFieldsUnknown(Map<String, String> fields) {
+    for (String value : fields.values()) {
+      if (value != null && !value.isBlank() && !"Unknown".equalsIgnoreCase(value.trim())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static Map<String, String> parseAlertFields(String response) {
+    Map<String, String> fields = new LinkedHashMap<>();
+    fields.put("Weather expected", "Unknown");
+    fields.put("Delays with travel", "Unknown");
+    fields.put("Events in the city", "Unknown");
+    fields.put("Health warnings", "Unknown");
+    fields.put("AQI and hazard information", "Unknown");
+    if (response == null || response.isBlank()) {
+      return fields;
+    }
+    String normalizedResponse = response.replace("[Website fallback]", "").trim();
+    if (normalizedResponse.contains("{") && normalizedResponse.contains("}")) {
+      String jsonLike = normalizedResponse.substring(normalizedResponse.indexOf('{'),
+          normalizedResponse.lastIndexOf('}') + 1);
+      putIfPresent(fields, "Weather expected", extractJsonValue(jsonLike, "weather"));
+      putIfPresent(fields, "Delays with travel", extractJsonValue(jsonLike, "delays"));
+      putIfPresent(fields, "Events in the city", extractJsonValue(jsonLike, "events"));
+      putIfPresent(fields, "Health warnings", extractJsonValue(jsonLike, "health"));
+      putIfPresent(fields, "AQI and hazard information", extractJsonValue(jsonLike, "aqi"));
+    }
+    String[] segments = normalizedResponse.split("\\|");
+    for (String segment : segments) {
+      String trimmed = segment.trim();
+      int colon = trimmed.indexOf(':');
+      if (colon < 0) {
+        continue;
+      }
+      String key = trimmed.substring(0, colon).trim();
+      String value = trimmed.substring(colon + 1).trim();
+      if (fields.containsKey(key) && !value.isBlank()) {
+        fields.put(key, value);
+      }
+    }
+    return fields;
+  }
+
+  private static void putIfPresent(Map<String, String> fields, String key, String value) {
+    if (value != null && !value.isBlank()) {
+      fields.put(key, value.trim());
+    }
+  }
+
+  private static String extractJsonValue(String body, String key) {
+    return matchField(body, "\"" + Pattern.quote(key) + "\"\\s*:\\s*\"(.*?)\"");
+  }
+
+  private static List<String> buildAlertTakeaways(RouteLegRow row, Map<String, String> fields) {
+    List<String> takeaways = new ArrayList<>();
+    addTakeaway(takeaways, fields.get("Weather expected"), "Weather watch: ");
+    addTakeaway(takeaways, fields.get("Delays with travel"), "Travel friction: ");
+    addTakeaway(takeaways, fields.get("Events in the city"), "City pulse: ");
+    addTakeaway(takeaways, fields.get("Health warnings"), "Health note: ");
+    addTakeaway(takeaways, fields.get("AQI and hazard information"), "Air quality note: ");
+    if (takeaways.isEmpty()) {
+      takeaways.add("AI details are still loading. Use the verification links below while the live summary refreshes.");
+    }
+    if (row.getTravelDate() != null) {
+      String travelTime = row.getTravelTime();
+      if (travelTime == null || travelTime.isBlank()) {
+        takeaways.add("Scheduled travel date: " + row.getTravelDate() + ".");
+      } else {
+        takeaways.add("Scheduled travel slot: " + row.getTravelDate() + " at " + travelTime + ".");
+      }
+    }
+    return takeaways.size() > 4 ? takeaways.subList(0, 4) : takeaways;
+  }
+
+  private static void addTakeaway(List<String> takeaways, String value, String prefix) {
+    if (value == null || value.isBlank()) {
+      return;
+    }
+    String normalized = value.trim();
+    if ("Unknown".equalsIgnoreCase(normalized) || normalized.startsWith("No live")) {
+      return;
+    }
+    takeaways.add(prefix + normalized);
+  }
+
+  private static String buildRouteNewsUrl(RouteLegRow row) {
+    return "https://news.google.com/search?q=" + encodePathSegment(
+        row.getFrom() + " " + row.getTo() + " " + row.getMode() + " travel alerts");
+  }
+
+  private static String buildTravelDelayUrl(RouteLegRow row) {
+    return "https://www.bing.com/news/search?q=" + encodePathSegment(
+        row.getTo() + " " + row.getMode() + " travel delay");
+  }
+
+  private static String buildWeatherDotComUrl(RouteLegRow row) {
+    return "https://www.google.com/search?q=" + encodePathSegment("site:weather.com " + row.getTo() + " weather");
+  }
+
+  private static String buildOpenMeteoVerifyUrl(RouteLegRow row) {
+    if (row == null) {
+      return "https://open-meteo.com/";
+    }
+    return "https://api.open-meteo.com/v1/forecast?latitude=" + row.getToLat() + "&longitude=" + row.getToLon()
+        + "&current=temperature_2m,weather_code,wind_speed_10m&temperature_unit=fahrenheit";
   }
 
   private static String matchField(String body, String regex) {
@@ -1035,7 +1708,7 @@ public class Main extends Application {
       }
     });
     modeCol.setComparator((a, b) -> Integer.compare(modeRank(a), modeRank(b)));
-    TableColumn<RouteLegRow, Double> costCol = new TableColumn<>("Cost ($)");
+    TableColumn<RouteLegRow, Double> costCol = new TableColumn<>("Booked Total");
     costCol.setCellValueFactory(new PropertyValueFactory<>("cost"));
     costCol.setCellFactory(col -> new TableCell<>() {
       @Override
@@ -1044,6 +1717,13 @@ public class Main extends Application {
         setText(empty || item == null ? "" : formatCurrency(item));
       }
     });
+    costCol.setPrefWidth(110);
+    TableColumn<RouteLegRow, String> estimateCol = new TableColumn<>("Estimate");
+    estimateCol.setCellValueFactory(new PropertyValueFactory<>("estimateCostDisplay"));
+    estimateCol.setPrefWidth(100);
+    TableColumn<RouteLegRow, String> varianceCol = new TableColumn<>("Variance");
+    varianceCol.setCellValueFactory(new PropertyValueFactory<>("costVarianceDisplay"));
+    varianceCol.setPrefWidth(95);
     TableColumn<RouteLegRow, Double> timeCol = new TableColumn<>("Time (hrs)");
     timeCol.setCellValueFactory(new PropertyValueFactory<>("hours"));
     timeCol.setCellFactory(col -> new TableCell<>() {
@@ -1062,39 +1742,13 @@ public class Main extends Application {
     travelTimeCol.setCellValueFactory(new PropertyValueFactory<>("travelTime"));
     travelTimeCol.setPrefWidth(90);
 
-    TableColumn<RouteLegRow, Void> bookActionCol = new TableColumn<>("Book");
-    bookActionCol.setCellFactory(col -> new TableCell<>() {
-      private final Button bookButton = new Button("Book");
-
-      {
-        bookButton.setOnAction(event -> {
-          RouteLegRow row = getTableView().getItems().get(getIndex());
-          if (row == null || row.isBooked()) {
-            return;
-          }
-          row.book(generateBookingReference(row));
-          getTableView().refresh();
-        });
-      }
-
-      @Override
-      protected void updateItem(Void item, boolean empty) {
-        super.updateItem(item, empty);
-        if (empty) {
-          setGraphic(null);
-          return;
-        }
-        RouteLegRow row = getTableView().getItems().get(getIndex());
-        boolean booked = row != null && row.isBooked();
-        bookButton.setText(booked ? "Booked" : "Book");
-        bookButton.setDisable(booked);
-        setGraphic(bookButton);
-      }
-    });
-
     TableColumn<RouteLegRow, String> bookingStatusCol = new TableColumn<>("Booking Status");
     bookingStatusCol.setCellValueFactory(new PropertyValueFactory<>("bookingStatus"));
-    bookingStatusCol.setPrefWidth(120);
+    bookingStatusCol.setPrefWidth(130);
+
+    TableColumn<RouteLegRow, String> bookingVendorCol = new TableColumn<>("Vendor");
+    bookingVendorCol.setCellValueFactory(new PropertyValueFactory<>("bookingVendor"));
+    bookingVendorCol.setPrefWidth(140);
 
     TableColumn<RouteLegRow, String> bookingRefCol = new TableColumn<>("Booking Ref");
     bookingRefCol.setCellValueFactory(new PropertyValueFactory<>("bookingReference"));
@@ -1142,25 +1796,27 @@ public class Main extends Application {
     expenseSummaryCol.setPrefWidth(260);
     expenseSummaryCol.setCellFactory(col -> new WrappingTableCell());
 
-    TableColumn<RouteLegRow, String> aiCol = new TableColumn<>("AI Suggestions");
-    aiCol.setCellValueFactory(new PropertyValueFactory<>("aiSuggestion"));
-    aiCol.setPrefWidth(360);
-    aiCol.setCellFactory(col -> new WrappingTableCell());
+    TableColumn<RouteLegRow, String> bookingNotesCol = new TableColumn<>("Booking Notes");
+    bookingNotesCol.setCellValueFactory(new PropertyValueFactory<>("bookingNotes"));
+    bookingNotesCol.setPrefWidth(220);
+    bookingNotesCol.setCellFactory(col -> new WrappingTableCell());
 
     table.getColumns().add(fromCol);
     table.getColumns().add(toCol);
     table.getColumns().add(modeCol);
     table.getColumns().add(costCol);
+    table.getColumns().add(estimateCol);
+    table.getColumns().add(varianceCol);
     table.getColumns().add(timeCol);
     table.getColumns().add(travelDateCol);
     table.getColumns().add(travelTimeCol);
-    table.getColumns().add(bookActionCol);
     table.getColumns().add(bookingStatusCol);
+    table.getColumns().add(bookingVendorCol);
     table.getColumns().add(bookingRefCol);
     table.getColumns().add(receiptActionCol);
     table.getColumns().add(receiptIdCol);
+    table.getColumns().add(bookingNotesCol);
     table.getColumns().add(expenseSummaryCol);
-    table.getColumns().add(aiCol);
 
     return table;
   }
@@ -1214,6 +1870,36 @@ public class Main extends Application {
     }
   }
 
+  private static final class Restaurant {
+    private final String name;
+    private final String cuisine;
+    private final String area;
+
+    private Restaurant(String name, String cuisine, String area) {
+      this.name = name;
+      this.cuisine = cuisine;
+      this.area = area;
+    }
+  }
+
+  private static final class HotelOption {
+    private final String name;
+    private final String type;
+    private final String area;
+
+    private HotelOption(String name, String type, String area) {
+      this.name = name;
+      this.type = type;
+      this.area = area;
+    }
+  }
+
+  private static final class BusinessTripProfile {
+    private String meetingGoals = "";
+    private String stakeholderPlan = "";
+    private String logisticsPlan = "";
+  }
+
   private static final class LiveAlertData {
     private final String weather;
     private final String aqi;
@@ -1226,11 +1912,37 @@ public class Main extends Application {
     }
   }
 
+  private static final class OpenAiCallResult {
+    private final boolean success;
+    private final boolean rateLimited;
+    private final String text;
+    private final String errorMessage;
+
+    private OpenAiCallResult(boolean success, boolean rateLimited, String text, String errorMessage) {
+      this.success = success;
+      this.rateLimited = rateLimited;
+      this.text = text;
+      this.errorMessage = errorMessage;
+    }
+
+    private static OpenAiCallResult success(String text) {
+      return new OpenAiCallResult(true, false, text, null);
+    }
+
+    private static OpenAiCallResult failure(String errorMessage) {
+      return new OpenAiCallResult(false, false, null, errorMessage);
+    }
+
+    private static OpenAiCallResult rateLimited(String errorMessage) {
+      return new OpenAiCallResult(false, true, null, errorMessage);
+    }
+  }
+
   public static final class RouteLegRow {
     private final String from;
     private final String to;
     private final String mode;
-    private final double cost;
+    private final double estimateCost;
     private final double hours;
     private final double toLat;
     private final double toLon;
@@ -1238,6 +1950,10 @@ public class Main extends Application {
     private String aiSuggestion;
     private String bookingStatus;
     private String bookingReference;
+    private String bookingVendor;
+    private double bookedBaseCost;
+    private double bookedFees;
+    private String bookingNotes;
     private String receiptId;
     private String expenseSummary;
     private LocalDate travelDate;
@@ -1249,14 +1965,18 @@ public class Main extends Application {
       this.from = from;
       this.to = to;
       this.mode = mode;
-      this.cost = cost;
+      this.estimateCost = cost;
       this.hours = hours;
       this.toLat = toLat;
       this.toLon = toLon;
       this.question = question;
       this.aiSuggestion = aiSuggestion;
-      this.bookingStatus = "Not booked";
+      this.bookingStatus = "Estimate only";
       this.bookingReference = "";
+      this.bookingVendor = "";
+      this.bookedBaseCost = 0;
+      this.bookedFees = 0;
+      this.bookingNotes = "";
       this.receiptId = "";
       this.expenseSummary = "";
       this.travelDate = null;
@@ -1277,7 +1997,11 @@ public class Main extends Application {
     }
 
     public double getCost() {
-      return cost;
+      return getBookedTotal() > 0 ? getBookedTotal() : estimateCost;
+    }
+
+    public double getEstimateCost() {
+      return estimateCost;
     }
 
     public double getHours() {
@@ -1306,6 +2030,43 @@ public class Main extends Application {
 
     public String getBookingReference() {
       return bookingReference;
+    }
+
+    public String getBookingVendor() {
+      return bookingVendor;
+    }
+
+    public double getBookedBaseCost() {
+      return bookedBaseCost;
+    }
+
+    public double getBookedFees() {
+      return bookedFees;
+    }
+
+    public double getBookedTotal() {
+      return bookedBaseCost + bookedFees;
+    }
+
+    public String getBookedTotalDisplay() {
+      return getBookedTotal() > 0 ? formatCurrency(getBookedTotal()) : "";
+    }
+
+    public String getEstimateCostDisplay() {
+      return formatCurrency(estimateCost);
+    }
+
+    public String getCostVarianceDisplay() {
+      if (getBookedTotal() <= 0) {
+        return "";
+      }
+      double variance = getBookedTotal() - estimateCost;
+      String prefix = variance > 0 ? "+" : "";
+      return prefix + formatCurrency(variance);
+    }
+
+    public String getBookingNotes() {
+      return bookingNotes;
     }
 
     public String getReceiptId() {
@@ -1348,6 +2109,22 @@ public class Main extends Application {
       this.bookingReference = bookingReference;
     }
 
+    public void setBookingVendor(String bookingVendor) {
+      this.bookingVendor = bookingVendor;
+    }
+
+    public void setBookedBaseCost(double bookedBaseCost) {
+      this.bookedBaseCost = bookedBaseCost;
+    }
+
+    public void setBookedFees(double bookedFees) {
+      this.bookedFees = bookedFees;
+    }
+
+    public void setBookingNotes(String bookingNotes) {
+      this.bookingNotes = bookingNotes;
+    }
+
     public void setReceiptId(String receiptId) {
       this.receiptId = receiptId;
     }
@@ -1365,7 +2142,7 @@ public class Main extends Application {
     }
 
     public boolean isBooked() {
-      return bookingReference != null && !bookingReference.isBlank();
+      return getBookedTotal() > 0 || (bookingReference != null && !bookingReference.isBlank());
     }
 
     public boolean hasReceipt() {
@@ -1375,6 +2152,27 @@ public class Main extends Application {
     public void book(String reference) {
       bookingStatus = "Booked";
       bookingReference = reference;
+    }
+
+    public void syncBooking(String vendor, double baseCost, double fees, String reference, String notes) {
+      bookingVendor = vendor == null ? "" : vendor.trim();
+      bookedBaseCost = Math.max(0, baseCost);
+      bookedFees = Math.max(0, fees);
+      bookingReference = reference == null ? "" : reference.trim();
+      bookingNotes = notes == null ? "" : notes.trim();
+      bookingStatus = getBookedTotal() > 0 ? "Synced from booking" : "Estimate only";
+      if (bookingReference.isBlank() && getBookedTotal() > 0) {
+        bookingReference = generateBookingReference(this);
+      }
+    }
+
+    public void clearBookingSync() {
+      bookingVendor = "";
+      bookedBaseCost = 0;
+      bookedFees = 0;
+      bookingReference = "";
+      bookingNotes = "";
+      bookingStatus = "Estimate only";
     }
 
     public void issueReceipt(String receiptId, String expenseSummary) {
@@ -1478,6 +2276,117 @@ public class Main extends Application {
     field.clear();
   }
 
+  private static void populateBookingSyncFields(RouteLegRow row, Label context, TextField vendorField,
+      TextField baseCostField, TextField feesField, TextField referenceField, TextArea notesArea) {
+    if (context == null || vendorField == null || baseCostField == null || feesField == null
+        || referenceField == null || notesArea == null) {
+      return;
+    }
+    if (row == null) {
+      context.setText("Selected leg: None");
+      vendorField.setText("");
+      baseCostField.setText("");
+      feesField.setText("");
+      referenceField.setText("");
+      notesArea.setText("");
+      return;
+    }
+    context.setText("Selected leg: " + row.getFrom() + " -> " + row.getTo() + " (" + row.getMode() + ")");
+    vendorField.setText(row.getBookingVendor());
+    baseCostField.setText(row.getBookedBaseCost() > 0 ? formatNumber(Double.toString(row.getBookedBaseCost())) : "");
+    feesField.setText(row.getBookedFees() > 0 ? formatNumber(Double.toString(row.getBookedFees())) : "");
+    referenceField.setText(row.getBookingReference());
+    notesArea.setText(row.getBookingNotes());
+  }
+
+  private static void openSelectedBookingLink(TableView<RouteLegRow> table) {
+    if (table == null) {
+      return;
+    }
+    RouteLegRow row = table.getSelectionModel().getSelectedItem();
+    if (row == null) {
+      return;
+    }
+    openExternalLink(encodePathSegment(buildBookingUrl(row.getTo())));
+  }
+
+  private static void saveBookingSync(TableView<RouteLegRow> table, TextField vendorField, TextField baseCostField,
+      TextField feesField, TextField referenceField, TextArea notesArea, TextArea routeBriefArea) {
+    if (table == null) {
+      return;
+    }
+    RouteLegRow row = table.getSelectionModel().getSelectedItem();
+    if (row == null) {
+      return;
+    }
+    double baseCost = parseCurrencyInput(baseCostField.getText());
+    double fees = parseCurrencyInput(feesField.getText());
+    row.syncBooking(vendorField.getText(), baseCost, fees, referenceField.getText(), notesArea.getText());
+    table.refresh();
+    triggerSpendUpdate(table);
+    loadTravelBrief(row, routeBriefArea);
+  }
+
+  private static void clearBookingSync(TableView<RouteLegRow> table, Label context, TextField vendorField,
+      TextField baseCostField, TextField feesField, TextField referenceField, TextArea notesArea,
+      TextArea routeBriefArea) {
+    if (table == null) {
+      return;
+    }
+    RouteLegRow row = table.getSelectionModel().getSelectedItem();
+    if (row == null) {
+      populateBookingSyncFields(null, context, vendorField, baseCostField, feesField, referenceField, notesArea);
+      return;
+    }
+    row.clearBookingSync();
+    table.refresh();
+    triggerSpendUpdate(table);
+    populateBookingSyncFields(row, context, vendorField, baseCostField, feesField, referenceField, notesArea);
+    loadTravelBrief(row, routeBriefArea);
+  }
+
+  private static double parseCurrencyInput(String value) {
+    if (value == null || value.isBlank()) {
+      return 0;
+    }
+    try {
+      return Double.parseDouble(value.replace("$", "").replace(",", "").trim());
+    } catch (NumberFormatException e) {
+      return 0;
+    }
+  }
+
+  private static void loadTravelBrief(RouteLegRow row, TextArea briefArea) {
+    if (briefArea == null) {
+      return;
+    }
+    if (row == null) {
+      briefArea.setText("Select a route leg to see live weather, city context, and booking guidance.");
+      return;
+    }
+    briefArea.setText("Loading travel brief...");
+    Thread worker = new Thread(() -> {
+      LiveAlertData liveAlert = getLiveAlertData(row);
+      String citySummary = buildWikiSuggestion(row.getTo());
+      StringBuilder brief = new StringBuilder();
+      brief.append("Mode: ").append(row.getMode()).append("\n");
+      brief.append("Estimated travel cost: ").append(formatCurrency(row.getEstimateCost())).append("\n");
+      brief.append("Booked total in table: ").append(formatCurrency(row.getCost())).append("\n");
+      brief.append("Weather: ").append(liveAlert != null ? liveAlert.weather : "Unknown").append("\n");
+      brief.append("Air quality: ").append(liveAlert != null ? liveAlert.aqi : "Unknown").append("\n");
+      brief.append("City context: ").append(citySummary == null || citySummary.isBlank() ? "Unavailable." : citySummary).append("\n");
+      if (row.isBooked()) {
+        brief.append("Synced booking vendor: ").append(row.getBookingVendor().isBlank() ? "Not provided" : row.getBookingVendor()).append("\n");
+        brief.append("Booking reference: ").append(row.getBookingReference().isBlank() ? "Not provided" : row.getBookingReference()).append("\n");
+      } else {
+        brief.append("Booking sync: Open Booking.com, then enter the exact vendor, base rate, and fees here.\n");
+      }
+      Platform.runLater(() -> briefArea.setText(brief.toString()));
+    }, "travel-brief-worker");
+    worker.setDaemon(true);
+    worker.start();
+  }
+
   private static String buildAiSuggestion(String from, String to, DrivingMetrics driving, ModeMetrics train, ModeMetrics air) {
     long now = System.currentTimeMillis();
     if (now < aiRateLimitedUntil) {
@@ -1497,28 +2406,11 @@ public class Main extends Application {
     if (model == null || model.isBlank()) {
       model = "gpt-4o-mini";
     }
-    String prompt = "You are a travel risk assistant. Provide a concise travel alert summary for travel from "
-        + from + " to " + to + ". "
-        + "Return only these fields in one line, using the exact labels and order: "
-        + "Weather expected: ... | Delays with travel: ... | Events in the city: ... | "
-        + "Health warnings: ... | AQI and hazard information: ... "
-        + "If data is unknown, say Unknown.";
-    String body = "{\"model\":\"" + jsonEscape(model) + "\","
-        + "\"input\":\"" + jsonEscape(prompt) + "\","
-        + "\"temperature\":0.4}";
+    String prompt = buildStructuredAlertPrompt(from, to, "travel", null, null);
     try {
-      HttpClient client = HttpClient.newBuilder()
-          .connectTimeout(Duration.ofSeconds(10))
-          .build();
       for (int attempt = 0; attempt < 2; attempt++) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create("https://api.openai.com/v1/responses"))
-            .header("Authorization", "Bearer " + apiKey)
-            .header("Content-Type", "application/json")
-            .timeout(Duration.ofSeconds(20))
-            .POST(HttpRequest.BodyPublishers.ofString(body))
-            .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() == 429) {
+        OpenAiCallResult result = requestOpenAiText(apiKey, model, prompt);
+        if (result.rateLimited) {
           aiRateLimitedUntil = System.currentTimeMillis() + AI_RATE_LIMIT_COOLDOWN_MS;
           if (attempt == 0) {
             Thread.sleep(2000);
@@ -1526,14 +2418,14 @@ public class Main extends Application {
           }
           return buildAlertUnavailable();
         }
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        if (!result.success) {
           return buildAlertUnavailable();
         }
-        String text = extractResponseText(response.body());
+        String text = result.text;
         if (text == null || text.isBlank()) {
           return buildAlertUnavailable();
         }
-        return text.strip();
+        return normalizeAlertResponse(text.strip(), new RouteLegRow(from, to, "Travel", 0, 0, "", "", 0, 0), null);
       }
       return buildAlertUnavailable();
     } catch (Exception e) {
@@ -1576,7 +2468,7 @@ public class Main extends Application {
     }
   }
 
-  private static void askAiForSelection(TableView<RouteLegRow> table, TextField input, TextArea response,
+  private static void askAiForSelection(TableView<RouteLegRow> table, TextField input, WebView response,
       Label context) {
     RouteLegRow row = table.getSelectionModel().getSelectedItem();
     if (row == null && !table.getItems().isEmpty()) {
@@ -1614,15 +2506,16 @@ public class Main extends Application {
     LiveAlertData liveAlert = getLiveAlertData(row);
     long now = System.currentTimeMillis();
     if (now < aiRateLimitedUntil) {
-      return buildAlertFromLiveData(liveAlert);
+      return buildAlertFromWebsiteData(row, liveAlert);
     }
     String apiKey = System.getenv("OPENAI_API_KEY");
     if (apiKey == null || apiKey.isBlank()) {
       apiKey = readConfigValue("OPENAI_API_KEY");
       if (apiKey == null || apiKey.isBlank()) {
-        return buildAlertFromLiveData(liveAlert);
+        return buildAlertFromWebsiteData(row, liveAlert);
       }
     }
+    apiKey = apiKey.trim();
     String model = System.getenv("OPENAI_MODEL");
     if (model == null || model.isBlank()) {
       model = readConfigValue("OPENAI_MODEL");
@@ -1631,50 +2524,38 @@ public class Main extends Application {
       model = "gpt-4o-mini";
     }
     String prompt = buildAlertPrompt(row, question, liveAlert);
-    String body = "{\"model\":\"" + jsonEscape(model) + "\","
-        + "\"input\":\"" + jsonEscape(prompt) + "\","
-        + "\"temperature\":0.4}";
     try {
       throttleAiRequests();
-      HttpClient client = HttpClient.newBuilder()
-          .connectTimeout(Duration.ofSeconds(10))
-          .build();
       for (int attempt = 0; attempt < 2; attempt++) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create("https://api.openai.com/v1/responses"))
-            .header("Authorization", "Bearer " + apiKey)
-            .header("Content-Type", "application/json")
-            .timeout(Duration.ofSeconds(20))
-            .POST(HttpRequest.BodyPublishers.ofString(body))
-            .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() == 429) {
+        OpenAiCallResult result = requestOpenAiText(apiKey, model, prompt);
+        if (result.rateLimited) {
           aiRateLimitedUntil = System.currentTimeMillis() + AI_RATE_LIMIT_COOLDOWN_MS;
           if (attempt == 0) {
             Thread.sleep(2000);
             continue;
           }
-          return buildAlertFromLiveData(liveAlert);
+          return buildAlertFromWebsiteData(row, liveAlert);
         }
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-          return buildAlertFromLiveData(liveAlert);
+        if (!result.success) {
+          return buildAlertFromWebsiteData(row, liveAlert);
         }
-        String text = extractResponseText(response.body());
+        String text = result.text;
         if (text == null || text.isBlank()) {
-          String errorMessage = extractErrorMessage(response.body());
+          String errorMessage = result.errorMessage;
           if (errorMessage != null && !errorMessage.isBlank()) {
-            return buildAlertFromLiveData(liveAlert);
+            return buildAlertFromWebsiteData(row, liveAlert);
           }
-          return buildAlertFromLiveData(liveAlert);
+          return buildAlertFromWebsiteData(row, liveAlert);
         }
-        String answer = text.strip();
+        String answer = normalizeAlertResponse(text.strip(), row, liveAlert);
         if (!isAlertFallback(answer)) {
           AI_QA_CACHE.put(cacheKey, answer);
         }
         return answer;
       }
-      return buildAlertFromLiveData(liveAlert);
+      return buildAlertFromWebsiteData(row, liveAlert);
     } catch (Exception e) {
-      return buildAlertFromLiveData(liveAlert);
+      return buildAlertFromWebsiteData(row, liveAlert);
     }
   }
 
@@ -1733,6 +2614,94 @@ public class Main extends Application {
     return lastText;
   }
 
+  private static OpenAiCallResult requestOpenAiText(String apiKey, String model, String prompt) {
+    HttpClient client = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(10))
+        .build();
+
+    OpenAiCallResult responsesResult = callResponsesApi(client, apiKey, model, prompt);
+    if (responsesResult.success || responsesResult.rateLimited) {
+      return responsesResult;
+    }
+
+    OpenAiCallResult chatResult = callChatCompletionsApi(client, apiKey, model, prompt);
+    if (chatResult.success || chatResult.rateLimited) {
+      return chatResult;
+    }
+
+    if (chatResult.errorMessage != null && !chatResult.errorMessage.isBlank()) {
+      return chatResult;
+    }
+    return responsesResult;
+  }
+
+  private static OpenAiCallResult callResponsesApi(HttpClient client, String apiKey, String model, String prompt) {
+    String body = "{\"model\":\"" + jsonEscape(model) + "\","
+        + "\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"" + jsonEscape(prompt) + "\"}]}],"
+        + "\"temperature\":0.4}";
+    try {
+      HttpRequest request = HttpRequest.newBuilder(URI.create("https://api.openai.com/v1/responses"))
+          .header("Authorization", "Bearer " + apiKey)
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(20))
+          .POST(HttpRequest.BodyPublishers.ofString(body))
+          .build();
+      HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() == 429) {
+        return OpenAiCallResult.rateLimited(extractErrorMessage(response.body()));
+      }
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        return OpenAiCallResult.failure(extractErrorMessage(response.body()));
+      }
+      String text = extractResponseText(response.body());
+      if (text == null || text.isBlank()) {
+        return OpenAiCallResult.failure(extractErrorMessage(response.body()));
+      }
+      return OpenAiCallResult.success(text.strip());
+    } catch (Exception e) {
+      return OpenAiCallResult.failure(e.getMessage());
+    }
+  }
+
+  private static OpenAiCallResult callChatCompletionsApi(HttpClient client, String apiKey, String model, String prompt) {
+    String body = "{\"model\":\"" + jsonEscape(model) + "\","
+        + "\"messages\":[{\"role\":\"user\",\"content\":\"" + jsonEscape(prompt) + "\"}],"
+        + "\"temperature\":0.4}";
+    try {
+      HttpRequest request = HttpRequest.newBuilder(URI.create("https://api.openai.com/v1/chat/completions"))
+          .header("Authorization", "Bearer " + apiKey)
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(20))
+          .POST(HttpRequest.BodyPublishers.ofString(body))
+          .build();
+      HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() == 429) {
+        return OpenAiCallResult.rateLimited(extractErrorMessage(response.body()));
+      }
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        return OpenAiCallResult.failure(extractErrorMessage(response.body()));
+      }
+      String text = extractChatCompletionText(response.body());
+      if (text == null || text.isBlank()) {
+        return OpenAiCallResult.failure(extractErrorMessage(response.body()));
+      }
+      return OpenAiCallResult.success(text.strip());
+    } catch (Exception e) {
+      return OpenAiCallResult.failure(e.getMessage());
+    }
+  }
+
+  private static String extractChatCompletionText(String body) {
+    if (body == null || body.isBlank()) {
+      return null;
+    }
+    String content = matchField(body, "\"content\"\\s*:\\s*\"(.*?)\"");
+    if (content != null && !content.isBlank()) {
+      return content;
+    }
+    return null;
+  }
+
   private static String extractErrorMessage(String body) {
     if (body == null || body.isEmpty() || !body.contains("\"error\"")) {
       return null;
@@ -1748,7 +2717,8 @@ public class Main extends Application {
     Properties properties = new Properties();
     try (FileInputStream stream = new FileInputStream("config.properties")) {
       properties.load(stream);
-      return properties.getProperty(key);
+      String value = properties.getProperty(key);
+      return value == null ? null : value.trim();
     } catch (Exception e) {
       return null;
     }
@@ -1848,6 +2818,7 @@ public class Main extends Application {
     return buildMonthLabel(date) + " | " + formatCurrency(row.getCost())
         + " | " + row.getFrom() + " -> " + row.getTo()
         + " | " + row.getMode()
+        + " | " + (row.getBookingVendor().isBlank() ? row.getBookingStatus() : row.getBookingVendor())
         + " | " + dateLabel + timeLabel;
   }
 
@@ -1858,7 +2829,8 @@ public class Main extends Application {
     StringBuilder detail = new StringBuilder();
     detail.append("Trip: ").append(row.getFrom()).append(" -> ").append(row.getTo()).append("\n");
     detail.append("Mode: ").append(row.getMode()).append("\n");
-    detail.append("Cost: ").append(formatCurrency(row.getCost())).append("\n");
+    detail.append("Booked total: ").append(formatCurrency(row.getCost())).append("\n");
+    detail.append("Estimate: ").append(formatCurrency(row.getEstimateCost())).append("\n");
     LocalDate date = resolveReportDate(row);
     String time = row.getTravelTime();
     if (date != null) {
@@ -1870,6 +2842,12 @@ public class Main extends Application {
     }
     if (row.getBookingReference() != null && !row.getBookingReference().isBlank()) {
       detail.append("Booking ref: ").append(row.getBookingReference()).append("\n");
+    }
+    if (row.getBookingVendor() != null && !row.getBookingVendor().isBlank()) {
+      detail.append("Vendor: ").append(row.getBookingVendor()).append("\n");
+    }
+    if (row.getBookingNotes() != null && !row.getBookingNotes().isBlank()) {
+      detail.append("Booking notes: ").append(row.getBookingNotes()).append("\n");
     }
     if (row.getReceiptId() != null && !row.getReceiptId().isBlank()) {
       detail.append("Receipt ID: ").append(row.getReceiptId()).append("\n");
@@ -1899,50 +2877,144 @@ public class Main extends Application {
   }
 
   private static void updateMonthlySpend(TableView<RouteLegRow> table, StackedBarChart<String, Number> chart,
-      ListView<RouteLegRow> reportList, TextArea reportDetails) {
-    if (table == null || chart == null || reportList == null || reportDetails == null) {
+      ListView<RouteLegRow> reportList, TextArea reportDetails, Label reportSummary, String reportFilter) {
+    if (table == null || chart == null || reportList == null || reportDetails == null || reportSummary == null) {
       return;
     }
     RouteLegRow selected = reportList.getSelectionModel().getSelectedItem();
     List<RouteLegRow> receipts = new ArrayList<>();
+    List<RouteLegRow> filteredRows = new ArrayList<>();
+    double bookedTotal = 0;
+    int pendingReceipts = 0;
     chart.getData().clear();
     for (RouteLegRow row : table.getItems()) {
-      if (row == null || !row.hasReceipt()) {
+      if (row == null) {
         continue;
       }
-      LocalDate date = resolveReportDate(row);
-      if (date == null) {
-        continue;
-      }
-      RouteLegRow receipt = row;
-      receipts.add(receipt);
-      String monthLabel = buildMonthLabel(date);
-      XYChart.Series<String, Number> series = new XYChart.Series<>();
-      XYChart.Data<String, Number> data = new XYChart.Data<>(monthLabel, Math.abs(receipt.getCost()));
-      series.getData().add(data);
-      chart.getData().add(series);
-      String shortInfo = buildTripShortform(receipt);
-      String detail = buildReportDetail(receipt);
-      data.nodeProperty().addListener((obs, oldNode, newNode) -> {
-        if (newNode == null) {
-          return;
+      if (row.isBooked()) {
+        bookedTotal += row.getCost();
+        if (!row.hasReceipt()) {
+          pendingReceipts++;
         }
-        Tooltip.install(newNode, new Tooltip(shortInfo));
-        newNode.setOnMouseEntered(event -> newNode.setStyle("-fx-opacity: 0.85; -fx-border-color: #1f4a7a; -fx-border-width: 1;"));
-        newNode.setOnMouseExited(event -> newNode.setStyle(""));
-        newNode.setOnMouseClicked(event -> {
-          reportDetails.setText(detail);
-          reportList.getSelectionModel().select(receipt);
+      }
+      if (matchesReportFilter(row, reportFilter)) {
+        filteredRows.add(row);
+      }
+      if (row.hasReceipt()) {
+        LocalDate date = resolveReportDate(row);
+        if (date == null) {
+          continue;
+        }
+        RouteLegRow receipt = row;
+        receipts.add(receipt);
+        String monthLabel = buildMonthLabel(date);
+        XYChart.Series<String, Number> series = new XYChart.Series<>();
+        XYChart.Data<String, Number> data = new XYChart.Data<>(monthLabel, Math.abs(receipt.getCost()));
+        series.getData().add(data);
+        chart.getData().add(series);
+        String shortInfo = buildTripShortform(receipt);
+        String detail = buildReportDetail(receipt);
+        data.nodeProperty().addListener((obs, oldNode, newNode) -> {
+          if (newNode == null) {
+            return;
+          }
+          Tooltip.install(newNode, new Tooltip(shortInfo));
+          newNode.setOnMouseEntered(event -> newNode.setStyle("-fx-opacity: 0.85; -fx-border-color: #1f4a7a; -fx-border-width: 1;"));
+          newNode.setOnMouseExited(event -> newNode.setStyle(""));
+          newNode.setOnMouseClicked(event -> {
+            reportList.getSelectionModel().select(receipt);
+            reportDetails.setText(detail);
+          });
         });
-      });
+      }
     }
-    reportList.getItems().setAll(receipts);
-    if (selected != null && receipts.contains(selected)) {
+    reportList.getItems().setAll(filteredRows);
+    reportSummary.setText("Booked total: " + formatCurrency(bookedTotal)
+        + " | Receipts: " + receipts.size()
+        + " | Pending receipts: " + pendingReceipts
+        + " | View: " + reportFilter);
+    if (selected != null && filteredRows.contains(selected)) {
       reportList.getSelectionModel().select(selected);
       reportDetails.setText(buildReportDetail(selected));
     } else {
       reportDetails.setText("");
     }
+  }
+
+  private static boolean matchesReportFilter(RouteLegRow row, String reportFilter) {
+    String filter = reportFilter == null ? "Receipts" : reportFilter;
+    switch (filter) {
+      case "Booked Travel":
+        return row.isBooked();
+      case "Pending Receipts":
+        return row.isBooked() && !row.hasReceipt();
+      case "All Legs":
+        return true;
+      case "Receipts":
+      default:
+        return row.hasReceipt();
+    }
+  }
+
+  private static void printReportView(List<RouteLegRow> rows, String reportFilter) {
+    if (rows == null || rows.isEmpty()) {
+      return;
+    }
+    openHtmlInBrowser(buildReportHtml(rows, reportFilter));
+  }
+
+  private static void openReportSummary(List<RouteLegRow> rows, String reportFilter) {
+    if (rows == null || rows.isEmpty()) {
+      return;
+    }
+    openHtmlInBrowser(buildReportHtml(rows, reportFilter));
+  }
+
+  private static void openHtmlInBrowser(String html) {
+    if (html == null || html.isBlank()) {
+      return;
+    }
+    try {
+      Path tempFile = Files.createTempFile("travel-report-", ".html");
+      Files.writeString(tempFile, html, StandardCharsets.UTF_8);
+      if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+        Desktop.getDesktop().browse(tempFile.toUri());
+      }
+    } catch (Exception e) {
+      // Ignore browser export failures.
+    }
+  }
+
+  private static String buildReportHtml(List<RouteLegRow> rows, String reportFilter) {
+    double total = 0;
+    for (RouteLegRow row : rows) {
+      total += row.getCost();
+    }
+    StringBuilder html = new StringBuilder();
+    html.append("<!doctype html><html><head><meta charset='utf-8'/>")
+        .append("<style>")
+        .append("body{font-family:Arial,sans-serif;margin:24px;background:#f8fafc;color:#17324d;}")
+        .append("h1{margin:0 0 8px 0;} .summary{margin-bottom:16px;color:#526b83;}")
+        .append("table{width:100%;border-collapse:collapse;background:#fff;}")
+        .append("th,td{border:1px solid #dce7f3;padding:8px 10px;font-size:12px;text-align:left;vertical-align:top;}")
+        .append("th{background:#eff6ff;} .small{color:#5d7186;font-size:11px;}")
+        .append("</style></head><body>")
+        .append("<h1>Travel Report</h1>")
+        .append("<div class='summary'>View: ").append(escapeHtml(reportFilter == null ? "Receipts" : reportFilter))
+        .append(" | Items: ").append(rows.size())
+        .append(" | Total: ").append(escapeHtml(formatCurrency(total))).append("</div>")
+        .append("<table><thead><tr><th>Trip</th><th>Mode</th><th>Booked Total</th><th>Estimate</th><th>Vendor</th><th>Reference</th><th>Notes</th></tr></thead><tbody>");
+    for (RouteLegRow row : rows) {
+      html.append("<tr><td>").append(escapeHtml(row.getFrom() + " -> " + row.getTo())).append("</td>")
+          .append("<td>").append(escapeHtml(row.getMode())).append("</td>")
+          .append("<td>").append(escapeHtml(formatCurrency(row.getCost()))).append("</td>")
+          .append("<td>").append(escapeHtml(formatCurrency(row.getEstimateCost()))).append("</td>")
+          .append("<td>").append(escapeHtml(row.getBookingVendor().isBlank() ? row.getBookingStatus() : row.getBookingVendor())).append("</td>")
+          .append("<td>").append(escapeHtml(row.getBookingReference())).append("</td>")
+          .append("<td>").append(escapeHtml(row.getBookingNotes())).append("</td></tr>");
+    }
+    html.append("</tbody></table><p class='small'>Use the browser print dialog for a hard copy or PDF.</p></body></html>");
+    return html.toString();
   }
 
   private static void triggerSpendUpdate(TableView<RouteLegRow> table) {
@@ -1955,21 +3027,20 @@ public class Main extends Application {
     }
   }
 
-  private static void updateAiPanel(RouteLegRow row, TextField questionField, TextArea responseArea, Label context) {
+  private static void updateAiPanel(RouteLegRow row, TextField questionField, WebView responseView, Label context) {
     if (row == null) {
       context.setText("Selected leg: None");
       questionField.setText("");
-      responseArea.setText("");
+      responseView.getEngine().loadContent(renderAiCardHtml(null));
       return;
     }
     context.setText("Selected leg: " + row.getFrom() + " -> " + row.getTo() + " (" + row.getMode() + ")");
     String question = row.getQuestion();
     questionField.setText(question == null ? "" : question);
-    String response = row.getAiSuggestion();
-    responseArea.setText(response == null ? "" : response);
+    responseView.getEngine().loadContent(renderAiCardHtml(row));
   }
 
-  private static void populateLiveAlerts(TableView<RouteLegRow> table) {
+  private static void populateLiveAlerts(TableView<RouteLegRow> table, Runnable onUpdate) {
     if (table == null || table.getItems().isEmpty()) {
       return;
     }
@@ -1985,28 +3056,20 @@ public class Main extends Application {
         String question = row.getQuestion();
         String normalizedQuestion = question == null || question.isBlank() ? null : question.trim();
         row.setAiSuggestion(askAiQuestion(row, normalizedQuestion));
+        Platform.runLater(() -> {
+          table.refresh();
+          if (onUpdate != null) {
+            onUpdate.run();
+          }
+        });
       }
-      Platform.runLater(table::refresh);
     }, "live-alerts-worker");
     worker.setDaemon(true);
     worker.start();
   }
 
-  private static Map<String, List<String>> buildSbaOffices() {
-    Map<String, List<String>> offices = new LinkedHashMap<>();
-    offices.put(normalizePlaceKey("Washington, DC"),
-        List.of("U.S. SBA Washington Metropolitan Area District Office"));
-    offices.put(normalizePlaceKey("Baltimore, MD"),
-        List.of("U.S. SBA Baltimore District Office"));
-    offices.put(normalizePlaceKey("Philadelphia, PA"),
-        List.of("U.S. SBA Eastern Pennsylvania District Office"));
-    offices.put(normalizePlaceKey("New York, NY"),
-        List.of("U.S. SBA New York District Office"));
-    return offices;
-  }
-
   private static void refreshAgendaCities(ListView<String> routeList, ComboBox<String> citySelect,
-      ListView<String> agendaList, ComboBox<String> sbaSelect, Label sbaLabel) {
+      ListView<String> agendaList) {
     String current = citySelect.getValue();
     citySelect.getItems().setAll(routeList.getItems());
     if (current != null && citySelect.getItems().contains(current)) {
@@ -2016,36 +3079,16 @@ public class Main extends Application {
     } else {
       citySelect.setValue(null);
     }
-    updateAgendaForCity(citySelect, agendaList, sbaSelect, sbaLabel);
+    updateAgendaForCity(citySelect, agendaList);
   }
 
-  private static void updateAgendaForCity(ComboBox<String> citySelect, ListView<String> agendaList,
-      ComboBox<String> sbaSelect, Label sbaLabel) {
+  private static void updateAgendaForCity(ComboBox<String> citySelect, ListView<String> agendaList) {
     String city = citySelect.getValue();
     if (city == null || city.isBlank()) {
       agendaList.setItems(FXCollections.observableArrayList());
-      sbaSelect.getItems().clear();
-      sbaSelect.setDisable(true);
-      sbaLabel.setText("No SBA office selected.");
       return;
     }
     agendaList.setItems(agendaItemsForCity(city));
-    List<String> offices = sbaOfficesForCity(city);
-    sbaSelect.getItems().setAll(offices);
-    sbaSelect.setDisable(offices.isEmpty());
-    String selected = SBA_SELECTIONS.get(normalizePlaceKey(city));
-    if (selected != null && offices.contains(selected)) {
-      sbaSelect.setValue(selected);
-      sbaLabel.setText(selected);
-    } else if (!offices.isEmpty()) {
-      String firstOffice = offices.get(0);
-      sbaSelect.setValue(firstOffice);
-      sbaLabel.setText(firstOffice);
-      SBA_SELECTIONS.put(normalizePlaceKey(city), firstOffice);
-    } else {
-      sbaSelect.setValue(null);
-      sbaLabel.setText("No local SBA office listed.");
-    }
   }
 
   private static ObservableList<String> agendaItemsForCity(String city) {
@@ -2061,17 +3104,6 @@ public class Main extends Application {
       }
       return items;
     }
-  }
-
-  private static List<String> sbaOfficesForCity(String city) {
-    if (city == null) {
-      return List.of();
-    }
-    List<String> offices = SBA_OFFICES.get(normalizePlaceKey(city));
-    if (offices == null) {
-      return List.of();
-    }
-    return offices;
   }
 
   private static void addAgendaItem(TextField field, ListView<String> list) {
@@ -2119,29 +3151,47 @@ public class Main extends Application {
     list.getSelectionModel().select(next);
   }
 
-  private static void addSbaVisit(ComboBox<String> citySelect, ListView<String> agendaList,
-      ComboBox<String> sbaSelect, boolean align) {
-    if (agendaList == null || sbaSelect == null || citySelect == null) {
+  private static BusinessTripProfile businessTripProfileForCity(String city) {
+    if (city == null || city.isBlank()) {
+      return new BusinessTripProfile();
+    }
+    String key = normalizePlaceKey(city);
+    synchronized (BUSINESS_TRIP_PROFILES) {
+      BusinessTripProfile profile = BUSINESS_TRIP_PROFILES.get(key);
+      if (profile == null) {
+        profile = new BusinessTripProfile();
+        BUSINESS_TRIP_PROFILES.put(key, profile);
+      }
+      return profile;
+    }
+  }
+
+  private static void loadBusinessTripProfile(String city, TextArea goalsArea, TextArea stakeholderArea,
+      TextArea logisticsArea) {
+    if (goalsArea == null || stakeholderArea == null || logisticsArea == null) {
       return;
     }
-    String city = citySelect.getValue();
-    String office = sbaSelect.getValue();
-    if ((office == null || office.isBlank()) && !sbaSelect.getItems().isEmpty()) {
-      office = sbaSelect.getItems().get(0);
-      sbaSelect.setValue(office);
-    }
-    if (city == null || office == null || office.isBlank()) {
+    if (city == null || city.isBlank()) {
+      goalsArea.setText("");
+      stakeholderArea.setText("");
+      logisticsArea.setText("");
       return;
     }
-    String item = "Conference: SBA office visit - " + office;
-    if (align) {
-      agendaList.getItems().remove(item);
-      agendaList.getItems().add(0, item);
-    } else if (!agendaList.getItems().contains(item)) {
-      agendaList.getItems().add(item);
+    BusinessTripProfile profile = businessTripProfileForCity(city);
+    goalsArea.setText(profile.meetingGoals);
+    stakeholderArea.setText(profile.stakeholderPlan);
+    logisticsArea.setText(profile.logisticsPlan);
+  }
+
+  private static void saveBusinessTripProfile(String city, TextArea goalsArea, TextArea stakeholderArea,
+      TextArea logisticsArea) {
+    if (city == null || city.isBlank() || goalsArea == null || stakeholderArea == null || logisticsArea == null) {
+      return;
     }
-    agendaList.getSelectionModel().select(item);
-    SBA_SELECTIONS.put(normalizePlaceKey(city), office);
+    BusinessTripProfile profile = businessTripProfileForCity(city);
+    profile.meetingGoals = goalsArea.getText() == null ? "" : goalsArea.getText().trim();
+    profile.stakeholderPlan = stakeholderArea.getText() == null ? "" : stakeholderArea.getText().trim();
+    profile.logisticsPlan = logisticsArea.getText() == null ? "" : logisticsArea.getText().trim();
   }
 
   private static String normalizeAlertQuestion(String question) {
@@ -2156,25 +3206,7 @@ public class Main extends Application {
   }
 
   private static String buildAlertPrompt(RouteLegRow row, String question, LiveAlertData liveAlert) {
-    StringBuilder prompt = new StringBuilder();
-    prompt.append("You are a travel risk assistant. Provide a concise travel alert summary for the route leg: ")
-        .append(row.getFrom()).append(" to ").append(row.getTo()).append(" via ").append(row.getMode()).append(". ")
-        .append("Return only these fields in one line, using the exact labels and order: ")
-        .append("Weather expected: ... | Delays with travel: ... | Events in the city: ... | ")
-        .append("Health warnings: ... | AQI and hazard information: ... ")
-        .append("If data is unknown, say Unknown.");
-    if (liveAlert != null) {
-      if (liveAlert.weather != null && !liveAlert.weather.isBlank()) {
-        prompt.append(" Known weather: ").append(liveAlert.weather).append(".");
-      }
-      if (liveAlert.aqi != null && !liveAlert.aqi.isBlank()) {
-        prompt.append(" Known AQI: ").append(liveAlert.aqi).append(".");
-      }
-    }
-    if (question != null && !question.isBlank()) {
-      prompt.append(" User note: ").append(question).append(".");
-    }
-    return prompt.toString();
+    return buildStructuredAlertPrompt(row.getFrom(), row.getTo(), row.getMode(), question, liveAlert);
   }
 
   private static String buildAlertUnavailable() {
@@ -2204,6 +3236,79 @@ public class Main extends Application {
       return "Unknown";
     }
     return value.trim();
+  }
+
+  private static String normalizeAlertResponse(String answer, RouteLegRow row, LiveAlertData liveAlert) {
+    Map<String, String> fields = parseAlertFields(answer);
+    String websiteFallback = buildAlertFromWebsiteData(row, liveAlert);
+    Map<String, String> fallbackFields = parseAlertFields(websiteFallback);
+    for (Map.Entry<String, String> entry : fallbackFields.entrySet()) {
+      String value = fields.get(entry.getKey());
+      if (value == null || value.isBlank() || "Unknown".equalsIgnoreCase(value)) {
+        fields.put(entry.getKey(), entry.getValue());
+      }
+    }
+    return buildAlertFields(fields.get("Weather expected"),
+        fields.get("Delays with travel"),
+        fields.get("Events in the city"),
+        fields.get("Health warnings"),
+        fields.get("AQI and hazard information"));
+  }
+
+  private static String buildStructuredAlertPrompt(String from, String to, String mode, String question,
+      LiveAlertData liveAlert) {
+    StringBuilder prompt = new StringBuilder();
+    prompt.append("You are a travel risk assistant. Analyze the route from ")
+        .append(from).append(" to ").append(to).append(" via ").append(mode).append(". ")
+        .append("Return valid JSON only with exactly these keys: ")
+        .append("weather, delays, events, health, aqi. ")
+        .append("Each value must be a short plain-English string. ")
+        .append("Do not include markdown, code fences, or extra commentary. ");
+    if (liveAlert != null) {
+      if (liveAlert.weather != null && !liveAlert.weather.isBlank()) {
+        prompt.append("Known weather: ").append(liveAlert.weather).append(". ");
+      }
+      if (liveAlert.aqi != null && !liveAlert.aqi.isBlank()) {
+        prompt.append("Known AQI: ").append(liveAlert.aqi).append(". ");
+      }
+    }
+    if (question != null && !question.isBlank()) {
+      prompt.append("Traveler question: ").append(question).append(". ");
+    }
+    prompt.append("If a field is unknown, set it to \"Unknown\".");
+    return prompt.toString();
+  }
+
+  private static String buildAlertFromWebsiteData(RouteLegRow row, LiveAlertData liveAlert) {
+    String weather = liveAlert != null ? liveAlert.weather : "Unknown";
+    String aqi = liveAlert != null ? liveAlert.aqi : "Unknown";
+    String events = buildWebsiteEventSummary(row);
+    String delays = buildWebsiteDelaySummary(row, weather);
+    String health = buildWebsiteHealthSummary(aqi);
+    return "[Website fallback] " + buildAlertFields(weather, delays, events, health, aqi);
+  }
+
+  private static String buildWebsiteEventSummary(RouteLegRow row) {
+    String summary = buildWikiSuggestion(row.getTo());
+    if (summary == null || summary.isBlank() || summary.contains("unavailable")) {
+      return "Website fallback: Check local venue and city calendars.";
+    }
+    return "Website fallback: " + summary;
+  }
+
+  private static String buildWebsiteDelaySummary(RouteLegRow row, String weather) {
+    String mode = row.getMode() == null ? "travel" : row.getMode().toLowerCase();
+    if (weather != null && !weather.isBlank() && !"Unknown".equalsIgnoreCase(weather)) {
+      return "Website fallback: Monitor " + mode + " conditions; current weather is " + weather + ".";
+    }
+    return "Website fallback: Verify live " + mode + " delays with the linked news and carrier sources.";
+  }
+
+  private static String buildWebsiteHealthSummary(String aqi) {
+    if (aqi == null || aqi.isBlank() || "Unknown".equalsIgnoreCase(aqi)) {
+      return "Website fallback: No specific health signal available; verify local public-health updates.";
+    }
+    return "Website fallback: Air quality signal is " + aqi + ".";
   }
 
   private static LiveAlertData getLiveAlertData(RouteLegRow row) {
