@@ -103,8 +103,7 @@ Included capabilities:
 
 ## Developer Narrative
 
-The app is implemented as a single JavaFX application centered in [`src/main/java/Main.java`](/C:/Users/rpuro/OneDrive/DOCUME~1-DESKTOP-V04283T-5701/Rohan%20Purohit/Portfolio/Technical%20Certifications/Programming%20and%20Databases/GitHub-AI-Development/TravelManagementApp/src/main/java/Main.java).
-
+The app is implemented as a single JavaFX application
 Key implementation characteristics:
 
 - Split-pane layout keeps heavy travel workflows visible without opening extra windows.
@@ -124,28 +123,26 @@ Primary integrations and sources:
 
 ## Screenshots
 
-### Current Application Screenshot
-
-The image below shows the earlier desktop layout. Replace this with fresh screenshots of the redesigned Booking Sync, City Guide, Business Traveler Workspace, and Reporting views when available.
-
-<img width="1908" height="1130" alt="Travel Portal screenshot" src="https://github.com/user-attachments/assets/0caee399-3245-4b03-b985-b3f9e3d1c1d4" />
-
-### Suggested Updated Screenshot Set
-
-For the refreshed README, capture and add:
 
 1. Route Map + Booking Hub
+
+
 2. Cost Table + Booking Sync panel
+
+
 3. Business Traveler Workspace
+
+
 4. Reporting view with drilldown and filters
+
+
 5. City Guide view
+
+
 
 ## Running the App
 
 The project is a Maven-based JavaFX application. In IntelliJ, use the shared JavaFX run configuration if present, or run the `Main` class with the required JavaFX module path.
 
-Required local configuration values are read from [`config.properties`](/C:/Users/rpuro/OneDrive/DOCUME~1-DESKTOP-V04283T-5701/Rohan%20Purohit/Portfolio/Technical%20Certifications/Programming%20and%20Databases/GitHub-AI-Development/TravelManagementApp/config.properties).
 
-## Recommended Next Documentation Step
 
-The README now matches the redesigned feature set at a narrative level. The next high-value improvement is to add fresh screenshots from the current build so the documentation reflects the actual booking-sync and reporting workflow rather than the earlier AI-driven version.
