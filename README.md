@@ -122,7 +122,9 @@ Primary integrations and sources:
 - Overpass/OpenStreetMap data for restaurant and hotel suggestions
 
 ## Screenshots
+Application Login Screen 
 
+<img width="959" height="628" alt="TravelPortalLoginScreen" src="https://github.com/user-attachments/assets/272a3c43-3a54-474d-a87c-b3789c5880c4" />
 
 1. Route Map + Booking Hub
 
