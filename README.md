@@ -127,18 +127,29 @@ Application Login Screen
 <img width="959" height="628" alt="TravelPortalLoginScreen" src="https://github.com/user-attachments/assets/272a3c43-3a54-474d-a87c-b3789c5880c4" />
 
 1. Route Map + Booking Hub
+<img width="1718" height="675" alt="TravelPortalAppMainDashboard" src="https://github.com/user-attachments/assets/267d69f5-274d-4666-9a7c-d93745ddc32b" />
+
+
 
 
 2. Cost Table + Booking Sync panel
+<img width="1719" height="682" alt="CostTableSyncedwithTripDetails" src="https://github.com/user-attachments/assets/0cc46ef9-57f0-4fd2-838d-50d018eaccfa" />
+
 
 
 3. Business Traveler Workspace
+   <img width="1722" height="689" alt="TraveLPortalAppMainDashboardBusinessPlannerView" src="https://github.com/user-attachments/assets/d6c39c3a-c954-4bb0-9f3e-d4f06c2adf0d" />
+
+Booking.com Integration
+<img width="1720" height="684" alt="Booking comReservationIntegration" src="https://github.com/user-attachments/assets/5a067b4b-4436-4689-8cb9-90fd087861b7" />
 
 
-4. Reporting view with drilldown and filters
+5. Reporting view with drilldown and filters
+<img width="1712" height="587" alt="TripSummary" src="https://github.com/user-attachments/assets/dee0631f-028c-41f4-ac83-76deb4ca6f55" />
 
 
-5. City Guide view
+6. City Guide view
+<img width="1720" height="684" alt="CityGuidePlanner" src="https://github.com/user-attachments/assets/377fe91e-8721-4fd6-a286-935ce960b3dd" />
 
 
 
